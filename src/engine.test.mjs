@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  playerDamage, beastDamage, elementalDamage, typeMultiplierClass, createGame, explore, attack, flee,
+  playerDamage, beastDamage, elementalDamage, typeMultiplierClass, createGame, explore, attack, flee, fleeChance,
   allocateStat, buyPotion, buyUpgrade, goldReward, levelFromXp, maxHpFor, summary,
   generateDungeonLayout, startDungeon, stepDungeon, isMarketLocked, companionStrike,
   companionAttackBoostPct, companionDefenseBoostPct, generateProceduralPath,
@@ -106,6 +106,79 @@ test('market + flee are guarded by phase', () => {
   assert.equal(buyUpgrade(g, 'weapon').kind, 'upgrade');
   assert.equal(g.weapon.tier, 4);
   assert.equal(flee(g).kind, 'blocked'); // not in battle
+});
+
+test('flee mechanics: fleeChance calculation with base chance and DEX scaling', () => {
+  const g = createGame({ beastData, seed: 10 });
+  g.level = 1;
+  g.stats.DEX = 0;
+  const baseChance = fleeChance(g);
+  assert.ok(baseChance >= 0.35, `Base chance should be at least 35%, got ${baseChance}`);
+
+  g.stats.DEX = 2;
+  const withDexChance = fleeChance(g);
+  assert.ok(withDexChance > baseChance, 'DEX investment should increase flee chance');
+
+  g.stats.DEX = 50;
+  const maxChance = fleeChance(g);
+  assert.equal(maxChance, 0.95, 'Flee chance should be capped at 95%');
+});
+
+test('flee combat resolution: success deals zero damage, advances step, and escapes', () => {
+  const g = createGame({ beastData, seed: 20 });
+  startDungeon(g, { stepsCount: 5, floor: 1 });
+  g.phase = 'battle';
+  g.beast = { id: 1, name: 'Wolf', displayName: 'Dire Wolf', type: 'Hunter', tier: 4, level: 1, hp: 30, maxHp: 30 };
+  const initialHp = g.hp;
+  const initialStep = g.dungeon.stepIndex;
+
+  // Mock rng to force flee success (roll = 0.0 < chance)
+  g.rng = () => 0.01;
+  const result = flee(g);
+
+  assert.equal(result.kind, 'fled');
+  assert.equal(result.success, true);
+  assert.equal(result.dmg, 0);
+  assert.equal(g.hp, initialHp, 'Player must take ZERO damage on successful flee');
+  assert.equal(g.beast, null, 'Beast must be cleared on successful flee');
+  assert.equal(g.phase, 'explore', 'Phase must return to explore on successful flee');
+  assert.equal(g.dungeon.stepIndex, initialStep + 1, 'Dungeon step must advance by 1 on successful flee');
+});
+
+test('flee combat resolution: failure causes beast strike damage and remains in battle', () => {
+  const g = createGame({ beastData, seed: 30 });
+  startDungeon(g, { stepsCount: 5, floor: 1 });
+  g.phase = 'battle';
+  g.beast = { id: 1, name: 'Wolf', displayName: 'Dire Wolf', type: 'Hunter', tier: 4, level: 1, hp: 30, maxHp: 30 };
+  const initialHp = g.hp;
+  const initialStep = g.dungeon.stepIndex;
+
+  // Mock rng to force flee failure (roll = 0.99 >= chance)
+  g.rng = () => 0.99;
+  const result = flee(g);
+
+  assert.equal(result.kind, 'fled');
+  assert.equal(result.success, false);
+  assert.ok(result.dmg > 0, `Player must take damage on failed flee, got ${result.dmg}`);
+  assert.equal(g.hp, initialHp - result.dmg, 'Player HP must be reduced by beast strike damage');
+  assert.ok(g.beast !== null, 'Beast must remain in combat on failed flee');
+  assert.equal(g.phase, 'battle', 'Phase must remain battle on failed flee');
+  assert.equal(g.dungeon.stepIndex, initialStep, 'Dungeon step must NOT advance on failed flee');
+});
+
+test('flee combat resolution: fleeing from boss encounters is strictly blocked', () => {
+  const g = createGame({ beastData, seed: 40 });
+  startDungeon(g, { stepsCount: 5, floor: 1 });
+  g.phase = 'battle';
+  g.beast = { id: 10, name: 'Dragon', displayName: 'Doom Dragon', type: 'Magical', tier: 1, level: 5, hp: 100, maxHp: 100, isBoss: true };
+  const initialStep = g.dungeon.stepIndex;
+
+  assert.equal(fleeChance(g), 0, 'Flee chance against a boss must be 0');
+  const result = flee(g);
+  assert.equal(result.kind, 'blocked');
+  assert.equal(result.reason, 'cannot_flee_boss');
+  assert.equal(g.dungeon.stepIndex, initialStep, 'Dungeon step must not advance when boss flee is blocked');
+  assert.equal(g.dungeon.cleared, false, 'Dungeon must NOT be marked cleared');
 });
 
 test('dungeon generator: deterministic layout, boss always last step', () => {

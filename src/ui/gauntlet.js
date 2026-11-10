@@ -4,6 +4,7 @@ import {
   explore,
   attack,
   flee,
+  fleeChance,
   allocateStat,
   buyPotion,
   buyUpgrade,
@@ -101,6 +102,8 @@ export function createGauntletView({
   let g = activeGauntletGame;
   let autoBattleTimer = null;
   let autoBattle = false;
+  let isAdvancingStep = false;
+  let lastAdvanceTime = 0;
   let chosenWeapon = g && g.weapon ? g.weapon.type : 'Blade';
   let currentCompanion = companion || (g ? g.companion : null) || (beasts.length ? beasts[0] : null);
   let showFullLog = false;
@@ -108,7 +111,26 @@ export function createGauntletView({
   let companionFilter = 'all'; // 'all' | 'Magical' | 'Hunter' | 'Brute'
   let activeNamedReveal = null;
 
+  function stopAutoBattle() {
+    autoBattle = false;
+    if (autoBattleTimer) {
+      clearTimeout(autoBattleTimer);
+      autoBattleTimer = null;
+    }
+  }
+
+  function scheduleAutoBattle(delay) {
+    if (autoBattleTimer) {
+      clearTimeout(autoBattleTimer);
+      autoBattleTimer = null;
+    }
+    if (autoBattle && g && g.phase !== 'dead' && document.body.contains(container)) {
+      autoBattleTimer = setTimeout(handleAutoBattle, delay);
+    }
+  }
+
   function initGame() {
+    stopAutoBattle();
     g = activeGauntletGame = createGame({
       beastData,
       seed: Date.now() ^ 0x1337,
@@ -155,8 +177,7 @@ export function createGauntletView({
     if (isLow) {
       playPulseSound(180);
       if (autoBattle) {
-        autoBattle = false;
-        if (autoBattleTimer) clearInterval(autoBattleTimer);
+        stopAutoBattle();
         showToast(`[LOW HP] Auto-battle stopped: (${g.hp}/${g.maxHp})! Heal or proceed manually.`);
         render();
       }
@@ -204,7 +225,7 @@ export function createGauntletView({
       void container.offsetWidth;
       container.classList.add('screen-damage-vignette');
 
-      const heroBox = container.querySelector('.battle-hero-card');
+      const heroBox = container.querySelector('.battle-hero-card') || container.querySelector('.corridor-hero-slot');
       if (heroBox) {
         const hurtEl = document.createElement('div');
         hurtEl.className = 'combat-float-number hurt';
@@ -225,13 +246,12 @@ export function createGauntletView({
 
   function handleAutoBattle() {
     if (!autoBattle || !g || !document.body.contains(container)) {
-      autoBattle = false;
-      if (autoBattleTimer) clearInterval(autoBattleTimer);
+      stopAutoBattle();
       return;
     }
 
     if (g.hp <= g.maxHp * 0.3) {
-      autoBattle = false;
+      stopAutoBattle();
       showToast(`[LOW HP] Auto-battle stopped: (${g.hp}/${g.maxHp})! Heal or proceed manually.`);
       render();
       return;
@@ -245,7 +265,16 @@ export function createGauntletView({
   }
 
   function executeStep() {
-    if (!g || g.phase !== 'explore') return;
+    if (!g) return;
+    if (isAdvancingStep) return;
+
+    if (g.phase !== 'explore') {
+      g.phase = 'explore';
+    }
+
+    isAdvancingStep = true;
+    lastAdvanceTime = Date.now();
+    setTimeout(() => { isAdvancingStep = false; }, 200);
 
     let ev;
     if (g.dungeon && !g.dungeon.cleared) {
@@ -253,6 +282,16 @@ export function createGauntletView({
     } else {
       startDungeon(g, { stepsCount: 12, floor: (g.dungeon?.floor || 0) + 1 });
       ev = stepDungeon(g);
+    }
+
+    if (!ev) return;
+
+    if (ev.kind === 'blocked') {
+      if (g.dungeon && g.dungeon.cleared) {
+        handleDungeonCleared();
+        render();
+        return;
+      }
     }
 
     // Beasts encountered in gauntlet are registered as discovered (not tamed)
@@ -271,20 +310,30 @@ export function createGauntletView({
     if (ev.kind === 'trap') {
       if (ev.avoided) {
         playGoodSound();
+        showToast('Trap deftly avoided! Dexterity check passed.');
       } else {
         playBadSound();
         triggerCombatFeedback({ dmgDealt: 0, dmgTaken: ev.dmg, isCrit: false });
+        showToast(`Dungeon trap sprung! Took ${ev.dmg} damage.`);
       }
     } else if (ev.kind === 'discovery') {
       playGoodSound();
+      showToast(`Discovered treasure chest! Found ${ev.gold} gold.`);
     } else if (ev.kind === 'dungeon_cleared' || (g.dungeon && g.dungeon.cleared)) {
       handleDungeonCleared();
+    } else if (ev.kind === 'beast' || ev.kind === 'boss') {
+      if (ev.ambushed) {
+        playBadSound();
+        showToast(`Ambushed by ${g.beast.displayName}!`);
+      } else {
+        playTick(600);
+      }
     }
 
     checkLowHpGuard();
 
     if (autoBattle && g.phase !== 'dead' && g.phase !== 'battle') {
-      setTimeout(handleAutoBattle, 450);
+      scheduleAutoBattle(450);
     }
   }
 
@@ -318,20 +367,25 @@ export function createGauntletView({
         const capturedDef = ev.defeated || g.beast;
         playCatchSound(capturedDef.tier || 1);
         if (onCaptureNamed) onCaptureNamed(capturedDef);
-        // Show Named Reveal Modal
+        // Pause auto-battle so player can view named card reveal
+        stopAutoBattle();
         activeNamedReveal = capturedDef;
       }
       if (ev.dungeonCleared) {
+        stopAutoBattle();
         handleDungeonCleared();
       }
     }
 
     if (g.phase === 'dead') {
+      stopAutoBattle();
       playMissSound();
       notifyNavState();
       render();
       return;
     }
+
+    render();
 
     triggerCombatFeedback({
       dmgDealt,
@@ -341,30 +395,58 @@ export function createGauntletView({
       compDmg: Math.min(dmgDealt, 8 + (g.level || 1)),
     });
 
-    render();
-
     if (autoBattle && g.phase === 'battle') {
-      setTimeout(handleAutoBattle, 480);
+      scheduleAutoBattle(480);
+    } else if (autoBattle && g.phase === 'explore' && g.dungeon && !g.dungeon.cleared && !activeNamedReveal && !dungeonClearedLoot) {
+      scheduleAutoBattle(550);
     }
   }
 
   function executeFlee() {
     if (!g || g.phase !== 'battle') return;
+    stopAutoBattle();
+    const oldHp = g.hp;
     const ev = flee(g);
+    if (ev.kind === 'blocked') {
+      if (ev.reason === 'cannot_flee_boss') {
+        playBadSound();
+        showToast('Cannot flee from a boss battle! Fight to the finish!');
+      }
+      return;
+    }
     if (ev.success) {
       playGoodSound();
+      showToast('Escaped cleanly! Zero damage taken.');
       if (g.dungeon && g.dungeon.cleared) {
         handleDungeonCleared();
       }
     } else {
       playBadSound();
+      const dmg = ev.dmg !== undefined ? ev.dmg : Math.max(0, oldHp - g.hp);
+      showToast(`Escape failed! Took ${dmg} beast strike damage.`);
+      if (g.phase === 'dead') {
+        playMissSound();
+      }
     }
+    checkLowHpGuard();
     notifyNavState();
     render();
+
+    if (!ev.success && g.phase !== 'dead') {
+      const dmg = ev.dmg !== undefined ? ev.dmg : Math.max(0, oldHp - g.hp);
+      if (dmg > 0) {
+        triggerCombatFeedback({
+          dmgDealt: 0,
+          dmgTaken: dmg,
+          isCrit: false,
+        });
+      }
+    }
   }
 
   function handleDungeonCleared() {
     if (!g || !g.dungeon) return;
+    stopAutoBattle();
     playLevelUpSound();
 
     // Floor completion bonus XP & level-up progression
@@ -430,6 +512,8 @@ export function createGauntletView({
 
   // 1. CAMP HUB SCREEN
   function createCampScreen() {
+    autoBattle = false;
+    if (autoBattleTimer) clearInterval(autoBattleTimer);
     const wrap = document.createElement('div');
     wrap.className = 'camp-scene-wrap arcade-panel';
 
@@ -655,7 +739,7 @@ export function createGauntletView({
 
       <!-- Action Button -->
       <div class="camp-action-zone" style="margin-top:6px;">
-        <button id="btn-start-gauntlet" class="btn-primary arcade-btn gauntlet-enter-btn" ${!chosenWeapon ? 'disabled' : ''}>
+        <button id="btn-start-gauntlet" type="button" class="btn-primary arcade-btn gauntlet-enter-btn" ${!chosenWeapon ? 'disabled' : ''}>
           ENTER THE GAUNTLET ▶
         </button>
       </div>
@@ -740,7 +824,13 @@ export function createGauntletView({
       render();
     };
 
-    wrap.querySelector('#btn-start-gauntlet').onclick = () => {
+    wrap.querySelector('#btn-start-gauntlet').onclick = (e) => {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      stopAutoBattle();
+      lastAdvanceTime = Date.now();
       startDungeon(g, { stepsCount: 12, floor: nextFloor });
       notifyNavState();
       render();
@@ -832,6 +922,7 @@ export function createGauntletView({
 
     header.querySelector('#btn-quit-dungeon').onclick = () => {
       if (confirm('Flee back to Camp? You will forfeit uncollected floor rewards.')) {
+        stopAutoBattle();
         g.dungeon.cleared = true;
         notifyNavState();
         render();
@@ -865,6 +956,8 @@ export function createGauntletView({
 
     const wepType = TYPE_OF_WEAPON[g.weapon.type];
     const multClass = typeMultiplierClass(wepType, beast.type);
+    const isBoss = Boolean(beast.isBoss);
+    const fleeChancePct = Math.round(fleeChance(g) * 100);
     let hintText = '1.0x Match';
     let hintColor = 'var(--text)';
     if (multClass === 'strong') {
@@ -919,11 +1012,11 @@ export function createGauntletView({
       </div>
 
       <div class="battle-actions-thumb-zone">
-        <button id="btn-attack" class="btn-primary arcade-btn" style="flex:2; height:50px; font-size:1.1rem; display:flex; align-items:center; justify-content:center; gap:6px;">
+        <button id="btn-attack" type="button" class="btn-primary arcade-btn" style="flex:2; height:50px; font-size:1.1rem; display:flex; align-items:center; justify-content:center; gap:6px;">
           ${ICONS.sword} ATTACK
         </button>
-        <button id="btn-flee" class="btn-ghost arcade-btn" style="flex:1; height:50px; border:1px solid var(--line); font-size:0.88rem;">
-          FLEE (30%)
+        <button id="btn-flee" type="button" class="btn-ghost arcade-btn" style="flex:1; height:50px; border:1px solid var(--line); font-size:0.88rem; ${isBoss ? 'opacity:0.45; cursor:not-allowed;' : ''}" ${isBoss ? 'disabled' : ''} title="${isBoss ? 'Cannot flee from a boss encounter!' : `Escape chance: ${fleeChancePct}%`}">
+          ${isBoss ? 'NO ESCAPE' : `FLEE (${fleeChancePct}%)`}
         </button>
       </div>
     `;
@@ -987,16 +1080,18 @@ export function createGauntletView({
 
       <!-- Action Button in Thumb Zone -->
       <div class="corridor-action-zone">
-        <button id="btn-explore" class="btn-primary arcade-btn" style="width:100%; height:52px; font-size:1.1rem;">
+        <button id="btn-explore" type="button" class="btn-primary arcade-btn gauntlet-enter-chamber-btn">
           ENTER CHAMBER ${chamberNum} ▶
         </button>
 
-        <div style="display:flex; justify-content:center; align-items:center; gap:8px; margin-top:12px;">
-          <label class="switch-control">
-            <input type="checkbox" id="chk-auto-battle" ${autoBattle ? 'checked' : ''} />
+        <div class="auto-battle-toggle-box" id="auto-battle-box" role="button" tabindex="0" title="Toggle Auto-Battle">
+          <span class="switch-control">
+            <input type="checkbox" id="chk-auto-battle" ${autoBattle ? 'checked' : ''} tabindex="-1" />
             <span class="switch-slider"></span>
-          </label>
-          <span style="font-size:0.75rem; color:var(--muted);">Auto-Battle (Hands-Free)</span>
+          </span>
+          <span class="auto-battle-label">
+            Auto-Battle <span class="auto-battle-sub">(Hands-Free)</span>
+          </span>
         </div>
       </div>
     `;
@@ -1006,13 +1101,54 @@ export function createGauntletView({
       compImg.onerror = () => handleArtError(compImg, currentCompanion);
     }
 
-    wrap.querySelector('#btn-explore').onclick = executeStep;
-
-    const autoChk = wrap.querySelector('#chk-auto-battle');
-    autoChk.onchange = (e) => {
-      autoBattle = e.target.checked;
-      handleAutoBattle();
+    const btnExplore = wrap.querySelector('#btn-explore');
+    btnExplore.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      executeStep();
     };
+
+    const autoBox = wrap.querySelector('#auto-battle-box') || wrap.querySelector('.auto-battle-toggle-box');
+    const autoChk = wrap.querySelector('#chk-auto-battle');
+
+    function toggleAutoBattle(nextState) {
+      // Guard against ghost-clicks within 650ms of advancing
+      if (Date.now() - lastAdvanceTime < 650) {
+        if (autoChk) autoChk.checked = autoBattle;
+        return;
+      }
+      autoBattle = typeof nextState === 'boolean' ? nextState : !autoBattle;
+      if (autoChk) autoChk.checked = autoBattle;
+      if (autoBattle) {
+        showToast('Auto-Battle Activated');
+        scheduleAutoBattle(200);
+      } else {
+        showToast('Auto-Battle Disabled');
+        stopAutoBattle();
+      }
+    }
+
+    if (autoChk) {
+      autoChk.onchange = (e) => {
+        e.stopPropagation();
+        toggleAutoBattle(autoChk.checked);
+      };
+    }
+
+    if (autoBox) {
+      autoBox.onclick = (e) => {
+        e.stopPropagation();
+        if (e.target === autoChk) return;
+        toggleAutoBattle(!autoBattle);
+      };
+      autoBox.onkeydown = (e) => {
+        if (e.key === ' ' || e.key === 'Enter') {
+          e.preventDefault();
+          e.stopPropagation();
+          toggleAutoBattle(!autoBattle);
+        }
+      };
+    }
 
     return wrap;
   }
@@ -1128,6 +1264,7 @@ export function createGauntletView({
     });
 
     wrap.querySelector('#btn-return-camp').onclick = () => {
+      stopAutoBattle();
       dungeonClearedLoot = null;
       if (g.dungeon) g.dungeon.cleared = true;
       notifyNavState();
@@ -1195,8 +1332,14 @@ export function createGauntletView({
       killerImg.onerror = () => handleArtError(killerImg, g.beast);
     }
 
-    wrap.querySelector('#btn-retry-gauntlet').onclick = () => initGame();
-    wrap.querySelector('#btn-death-exit').onclick = () => { if (onExit) onExit(); };
+    wrap.querySelector('#btn-retry-gauntlet').onclick = () => {
+      stopAutoBattle();
+      initGame();
+    };
+    wrap.querySelector('#btn-death-exit').onclick = () => {
+      stopAutoBattle();
+      if (onExit) onExit();
+    };
 
     return wrap;
   }

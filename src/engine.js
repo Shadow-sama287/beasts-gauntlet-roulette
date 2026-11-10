@@ -257,24 +257,42 @@ export function attack(g) {
   return { kind: 'attack', dmg, crit, comp, companionBonusPct: bonusPct, friendliness };
 }
 
+export function fleeChance(g) {
+  if (!g) return 0.35;
+  if (g.beast && g.beast.isBoss) return 0;
+  const dex = (g.stats && g.stats.DEX) || 0;
+  const lvl = Math.max(1, g.level || 1);
+  const baseChance = 0.35;
+  const dexBonus = (dex / lvl) * 0.45;
+  return Math.min(0.95, Math.max(0.20, baseChance + dexBonus));
+}
+
 export function flee(g) {
-  if (g.phase !== 'battle') return { kind: 'blocked' };
-  const chance = Math.min(1, g.stats.DEX / g.level); // docs: DEX/level
+  if (g.phase !== 'battle') return { kind: 'blocked', reason: 'not_in_battle' };
+  if (!g.beast) return { kind: 'blocked', reason: 'no_beast' };
+  if (g.beast.isBoss) {
+    say(g, `You cannot escape from the boss ${g.beast.displayName}!`);
+    return { kind: 'blocked', reason: 'cannot_flee_boss' };
+  }
+  const chance = fleeChance(g);
   if (g.rng() < chance) {
-    say(g, `You escape from ${g.beast.displayName}.`);
+    say(g, `You escape cleanly from ${g.beast.displayName}! (Zero damage taken)`);
     g.beast = null;
     g.phase = 'explore';
     if (g.dungeon && !g.dungeon.cleared) {
       g.dungeon.stepIndex++;
       if (g.dungeon.stepIndex >= g.dungeon.stepsCount) {
         g.dungeon.cleared = true;
+        say(g, `★ FLOOR ${g.dungeon.floor} CLEARED!`);
       }
     }
-    return { kind: 'fled', success: true };
+    return { kind: 'fled', success: true, dmg: 0, chance };
   }
-  say(g, 'You fail to escape!');
+  say(g, `You fail to escape from ${g.beast.displayName}!`);
+  const oldHp = g.hp;
   beastStrike(g);
-  return { kind: 'fled', success: false };
+  const dmg = Math.max(0, oldHp - g.hp);
+  return { kind: 'fled', success: false, dmg, chance };
 }
 
 function beastStrike(g) {
