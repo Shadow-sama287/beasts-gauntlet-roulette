@@ -1,7 +1,7 @@
 # Beast Gauntlet & Roulette ⚔️🎰
 
 [![Repository](https://img.shields.io/badge/GitHub-Shadow--sama287%2Fbeasts--gauntlet--roulette-181717?logo=github)](https://github.com/Shadow-sama287/beasts-gauntlet-roulette)
-[![Tests](https://img.shields.io/badge/Unit%20Tests-49%20Passing-brightgreen?logo=node.js)](https://github.com/Shadow-sama287/beasts-gauntlet-roulette)
+[![Tests](https://img.shields.io/badge/Unit%20Tests-73%20Passing-brightgreen?logo=node.js)](https://github.com/Shadow-sama287/beasts-gauntlet-roulette)
 [![Network](https://img.shields.io/badge/Offline-100%25%20Self--Contained-blue)](https://github.com/Shadow-sama287/beasts-gauntlet-roulette)
 [![Chain](https://img.shields.io/badge/Chain-Starknet%20Sepolia-orange)](https://github.com/Shadow-sama287/beasts-gauntlet-roulette)
 [![Stack](https://img.shields.io/badge/Stack-Vite%20%2B%20Vanilla%20JS%20%2B%20Phaser%203-purple)](https://github.com/Shadow-sama287/beasts-gauntlet-roulette)
@@ -121,7 +121,7 @@ cd beasts-gauntlet-roulette
 # 2. Install dependencies
 npm install
 
-# 3. Run full test suite (49 unit tests across combat, onchain, verifiable spin, wallet, receipt, and minigames)
+# 3. Run full test suite (73 unit tests across combat, onchain, verifiable spin, wallet, receipt, and minigames)
 npm test
 
 # 4. Generate Beast Art Census Report (verifies all 105 SVGs)

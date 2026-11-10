@@ -17,6 +17,7 @@ import {
   startDungeon,
   stepDungeon,
   isMarketLocked,
+  levelFromXp,
 } from '../engine.js';
 import beastData from '../beasts.json';
 import {
@@ -32,6 +33,7 @@ import {
 } from '../audio.js';
 import { handleArtError, artForBeast } from '../beastLoader.js';
 import { TIER_COLORS, TIER_NAMES } from '../roulette.js';
+import { saveAlbum } from '../albumStorage.js';
 
 let activeGauntletGame = null;
 
@@ -151,6 +153,14 @@ export function createGauntletView({
       config: DEMO_CONFIG,
     });
   }
+  if (typeof window !== 'undefined') {
+    window.__gauntletContext = {
+      getGame: () => g,
+      render,
+      handleDungeonCleared,
+      clearDungeonLoot: () => { dungeonClearedLoot = null; render(); }
+    };
+  }
   notifyNavState();
 
   function showToast(msg) {
@@ -164,7 +174,7 @@ export function createGauntletView({
   }
 
   function notifyNavState() {
-    const inActiveDungeon = Boolean(g && g.dungeon && !g.dungeon.cleared && g.phase !== 'dead');
+    const inActiveDungeon = Boolean(g && g.dungeon && !g.dungeon.cleared && g.phase !== 'dead' && !dungeonClearedLoot && !activeNamedReveal);
     if (onDungeonStateChange) onDungeonStateChange(inActiveDungeon);
     document.body.classList.toggle('hide-bottom-nav', inActiveDungeon);
   }
@@ -446,6 +456,7 @@ export function createGauntletView({
 
   function handleDungeonCleared() {
     if (!g || !g.dungeon) return;
+    g.dungeon.cleared = true;
     stopAutoBattle();
     playLevelUpSound();
 
@@ -1248,9 +1259,14 @@ export function createGauntletView({
           </div>
         `}
 
-        <button id="btn-return-camp" class="btn-primary arcade-btn" style="width:100%; height:50px; font-size:1.05rem;">
-          RETURN TO CAMP (Heal & Shop)
-        </button>
+        <div style="display:flex; flex-direction:column; gap:8px; margin-top:16px;">
+          <button id="btn-return-camp" class="btn-primary arcade-btn" style="width:100%; height:50px; font-size:1.05rem;">
+            RETURN TO CAMP (Heal & Shop)
+          </button>
+          <button id="btn-cleared-exit" class="btn-ghost arcade-btn" style="width:100%; height:44px; border:1px solid var(--line); font-size:0.9rem; color:var(--muted);">
+            EXIT GAUNTLET (Return to Hub)
+          </button>
+        </div>
       </div>
     `;
 
@@ -1270,6 +1286,18 @@ export function createGauntletView({
       notifyNavState();
       render();
     };
+
+    const exitBtn = wrap.querySelector('#btn-cleared-exit');
+    if (exitBtn) {
+      exitBtn.onclick = () => {
+        stopAutoBattle();
+        dungeonClearedLoot = null;
+        if (g.dungeon) g.dungeon.cleared = true;
+        notifyNavState();
+        if (onExit) onExit();
+        else render();
+      };
+    }
 
     return wrap;
   }

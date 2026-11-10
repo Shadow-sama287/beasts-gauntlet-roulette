@@ -161,11 +161,15 @@ function handleGlobalKeydown(e) {
         if (spinBtn && !spinBtn.disabled) spinBtn.click();
       }
     } else if (currentScreen === 'gauntlet') {
+      const namedC = document.getElementById('btn-named-continue');
+      const retCamp = document.getElementById('btn-return-camp');
       const atkBtn = document.getElementById('btn-attack');
       const expBtn = document.getElementById('btn-explore');
       const startG = document.getElementById('btn-start-gauntlet');
       const retryG = document.getElementById('btn-retry-gauntlet');
-      if (atkBtn && !atkBtn.disabled) atkBtn.click();
+      if (namedC && !namedC.disabled) namedC.click();
+      else if (retCamp && !retCamp.disabled) retCamp.click();
+      else if (atkBtn && !atkBtn.disabled) atkBtn.click();
       else if (expBtn && !expBtn.disabled) expBtn.click();
       else if (startG && !startG.disabled) startG.click();
       else if (retryG && !retryG.disabled) retryG.click();
