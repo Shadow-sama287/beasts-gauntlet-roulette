@@ -318,22 +318,16 @@ export function spin(state) {
   const allSlices = buildWheel(state.beasts, state.owned);
   if (allSlices.length === 0) return null;
 
-  // Pity check per GACHA_SYSTEM_SPEC.md Section 4.3 (and legacy hooks)
+  // Pity check per GACHA_SYSTEM_SPEC.md Section 4.3 (single source of truth: GACHA_CONFIG.pity)
   let targetRarityCap = null;
   let pityType = null;
 
-  if ((state.spinsSinceTier1 || 0) >= GACHA_CONFIG.pity.tier1GuaranteedAt - 1 || (state.pityT1Counter || 0) >= 29) {
+  if ((state.spinsSinceTier1 || 0) >= GACHA_CONFIG.pity.tier1GuaranteedAt - 1) {
     targetRarityCap = 1;
     pityType = 'T1';
-  } else if ((state.spinsSinceTier3OrBetter || 0) >= GACHA_CONFIG.pity.tier3OrBetterGuaranteedAt - 1 || (state.pityT3Counter || 0) >= 11) {
+  } else if ((state.spinsSinceTier3OrBetter || 0) >= GACHA_CONFIG.pity.tier3OrBetterGuaranteedAt - 1) {
     targetRarityCap = 3;
     pityType = 'T3';
-  } else if ((state.pityT2Counter || 0) >= 19 || (state.pityCounter || 0) >= 5) {
-    targetRarityCap = 2;
-    pityType = 'T2';
-  } else if ((state.pityT4Counter || 0) >= 4) {
-    targetRarityCap = 4;
-    pityType = 'T4';
   }
 
   let pool = allSlices;
@@ -471,13 +465,24 @@ export function catchBeast(state, beast) {
 }
 
 /**
- * Resolves a miss.
+ * Resolves a miss. Grants consolation credits and essence per brief Section 2.4.
  */
 export function missBeast(state) {
   state.hearts = Math.max(0, state.hearts - 1);
   const isGameOver = state.hearts <= 0 || state.spinsUsed >= state.spinsMax;
   state.gameOver = isGameOver;
-  return { hearts: state.hearts, gameOver: isGameOver };
+
+  const creditsGained = 5;
+  const essenceGained = 1;
+  state.credits = (state.credits || 0) + creditsGained;
+  state.essence = Math.min(10, (state.essence || 0) + essenceGained);
+
+  return {
+    hearts: state.hearts,
+    gameOver: isGameOver,
+    creditsGained,
+    essenceGained,
+  };
 }
 
 /**

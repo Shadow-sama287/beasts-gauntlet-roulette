@@ -5,14 +5,15 @@ import { SEPOLIA } from '../onchain.js';
 
 let activeModal = null;
 
-export function openCardModal(beast, { isCaught = true, isCompanion = false, isOwnedOnchain = false, onSelectCompanion } = {}) {
+export function openCardModal(beast, { isCaught = true, isDiscovered = false, isCompanion = false, isOwnedOnchain = false, friendliness = 10, onSelectCompanion } = {}) {
   closeCardModal();
 
+  const isRevealed = isCaught || isDiscovered;
   const tier = beast.tier || beast.rarity || 5;
   const tierColor = TIER_COLORS[tier] || '#f2f2f2';
   const tierName = TIER_NAMES[tier] || 'Common';
   const combatType = beast.type || (tier % 3 === 0 ? 'Brute' : tier % 3 === 1 ? 'Magical' : 'Hunter');
-  const typeIcons = { Magical: '🪄 Magical', Hunter: '🏹 Hunter', Brute: '🔨 Brute' };
+  const typeIcons = { Magical: 'Magical', Hunter: 'Hunter', Brute: 'Brute' };
   const advantages = {
     Magical: 'Strong vs Brute (+50%) · Weak vs Hunter',
     Hunter: 'Strong vs Magical (+50%) · Weak vs Brute',
@@ -32,13 +33,13 @@ export function openCardModal(beast, { isCaught = true, isCompanion = false, isO
 
   modalOverlay.innerHTML = `
     <div class="modal-card-wrap">
-      <div class="holo-card ${isOwnedOnchain ? 'owned-glow' : ''}" id="holo-card" style="border-color:${isCaught ? tierColor : '#3a3a4c'}; box-shadow: 0 0 ${isOwnedOnchain ? '45px #f5c542' : isCaught ? `35px ${tierColor}44` : '20px rgba(0,0,0,0.8)'};">
+      <div class="holo-card ${isOwnedOnchain ? 'owned-glow' : ''}" id="holo-card" style="border-color:${isCaught ? tierColor : isDiscovered ? '#5b658a' : '#3a3a4c'}; box-shadow: 0 0 ${isOwnedOnchain ? '45px #f5c542' : isCaught ? `35px ${tierColor}44` : isDiscovered ? '25px rgba(100,150,255,0.25)' : '20px rgba(0,0,0,0.8)'};">
         <div class="holo-shimmer" id="holo-shimmer"></div>
         <button class="modal-close-btn" id="modal-close" title="Close (Esc)">✕</button>
 
         <div class="holo-art-frame">
-          <img src="${beast.art || artForBeast(beast.id) || `/beasts/art/${beast.id}.svg`}" alt="${isCaught ? beast.name : '???'}" class="holo-art-img ${!isCaught ? 'silhouette' : ''}" />
-          ${!isCaught ? '<div class="locked-question-mark">?</div>' : ''}
+          <img src="${beast.art || artForBeast(beast.id) || `/beasts/art/${beast.id}.svg`}" alt="${isRevealed ? beast.name : '???'}" class="holo-art-img ${!isRevealed ? 'silhouette' : ''}" />
+          ${!isRevealed ? '<div class="locked-question-mark">?</div>' : ''}
         </div>
 
         <!-- Badges positioned cleanly below art frame, never obstructing card artwork -->
@@ -47,32 +48,47 @@ export function openCardModal(beast, { isCaught = true, isCompanion = false, isO
             isCaught
               ? `
                 <span class="holo-badge" style="background:${tierColor}; color:#000; font-weight:bold; padding:2px 8px; border-radius:12px; font-size:0.7rem;">T${tier} ${tierName.toUpperCase()}</span>
-                ${(beast.isArtathon || Number(beast.id) >= 10000) ? '<span class="artathon-pill-badge" style="font-size:0.65rem; padding:2px 6px;">🎨 ARTATHON SUBMISSION</span>' : ''}
+                ${(beast.isArtathon || Number(beast.id) >= 10000) ? '<span class="artathon-pill-badge" style="font-size:0.65rem; padding:2px 6px;">ARTATHON SUBMISSION</span>' : ''}
                 ${beast.isOnchain ? '<span class="onchain-pill-badge" style="font-size:0.65rem; padding:2px 6px;">ONCHAIN</span>' : '<span class="sigil-pill-badge" style="font-size:0.65rem; padding:2px 6px;">LOCAL</span>'}
                 ${isOwnedOnchain ? '<span class="owned-pill-badge" style="background:#f5c542; color:#000; font-weight:800; padding:2px 8px; border-radius:12px; font-size:0.65rem;">OWNED NFT</span>' : ''}
               `
+              : isDiscovered
+              ? `
+                <span class="holo-badge" style="background:${tierColor}; color:#000; font-weight:bold; padding:2px 8px; border-radius:12px; font-size:0.7rem;">T${tier} ${tierName.toUpperCase()}</span>
+                <span class="discovered-pill-badge" style="padding:2px 8px; border-radius:12px; font-size:0.68rem;">DISCOVERED IN GAUNTLET</span>
+                ${(beast.isArtathon || Number(beast.id) >= 10000) ? '<span class="artathon-pill-badge" style="font-size:0.65rem; padding:2px 6px;">ARTATHON SUBMISSION</span>' : ''}
+              `
               : `
-                <span class="badge-tag" style="background:#1d1b28; color:var(--muted); font-size:0.72rem;">🔒 UNDISCOVERED SPECIES</span>
-                ${(beast.isArtathon || Number(beast.id) >= 10000) ? '<span class="artathon-pill-badge" style="font-size:0.65rem; padding:2px 6px;">🎨 ARTATHON SUBMISSION</span>' : ''}
+                <span class="badge-tag" style="background:#1d1b28; color:var(--muted); font-size:0.72rem;">[LOCKED] UNDISCOVERED SPECIES</span>
+                ${(beast.isArtathon || Number(beast.id) >= 10000) ? '<span class="artathon-pill-badge" style="font-size:0.65rem; padding:2px 6px;">ARTATHON SUBMISSION</span>' : ''}
               `
           }
         </div>
 
         <div class="holo-info" style="margin-top:8px;">
-          <h2 class="holo-title" style="font-size:1.3rem;">${isCaught ? (beast.prefix ? `${beast.prefix} ` : '') + beast.name : '???'}</h2>
+          <h2 class="holo-title" style="font-size:1.3rem;">${isRevealed ? (beast.prefix ? `${beast.prefix} ` : '') + beast.name : '???'}</h2>
           
           ${
             isCaught
               ? `
                 <div class="holo-type" style="color:${tierColor}; font-weight:bold; margin-top:2px;">${typeIcons[combatType] || combatType}</div>
                 <div class="holo-advantage" style="font-size:0.75rem; color:var(--muted); margin-top:2px;">${advantages[combatType] || ''}</div>
-                ${(beast.isArtathon || Number(beast.id) >= 10000)
-                  ? `<div class="artathon-community-note" style="margin-top:6px; font-size:0.72rem; color:#d8b4fe; background:rgba(164, 92, 255, 0.12); border:1px solid rgba(164, 92, 255, 0.35); border-radius:6px; padding:4px 8px; text-align:center;">
-                      🎨 <strong>Community Artathon Species</strong> · Official Beasts Hackathon Submission
-                    </div>`
-                  : ''
-                }
                 
+                <!-- Friendliness Stat & Gauntlet Boosts -->
+                <div class="holo-friendliness-box" style="margin-top:8px; padding:8px 10px; background:rgba(255, 94, 148, 0.1); border:1px solid rgba(255, 94, 148, 0.35); border-radius:8px;">
+                  <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.8rem;">
+                    <span style="color:#ff5e94; font-weight:bold;">♥ FRIENDLINESS BOND:</span>
+                    <strong class="num" style="color:#ff5e94; font-size:0.95rem;">${friendliness}%</strong>
+                  </div>
+                  <div class="meter-track" style="height:5px; margin-top:4px;">
+                    <div class="meter-fill" style="width:${Math.min(100, friendliness)}%; background:#ff5e94;"></div>
+                  </div>
+                  <div style="font-size:0.7rem; color:var(--muted); margin-top:4px; display:flex; justify-content:space-between;">
+                    <span>Atk Boost: <strong style="color:var(--gold);">+${friendliness}%</strong></span>
+                    <span>Def Guard: <strong style="color:var(--good);">${Math.round(friendliness * 0.4)}%</strong></span>
+                  </div>
+                </div>
+
                 <div class="holo-meta-row" style="margin-top:8px; display:flex; justify-content:space-between; font-size:0.8rem; background:rgba(255,255,255,0.03); padding:6px 10px; border-radius:6px;">
                   <div><strong>Species:</strong> <span class="num">#${beast.id}</span></div>
                   <div><strong>Status:</strong> <span style="color:var(--good); font-weight:bold;">TAMED</span></div>
@@ -80,25 +96,25 @@ export function openCardModal(beast, { isCaught = true, isCompanion = false, isO
                 
                 <div class="holo-meta-row" style="margin-top:6px; display:grid; grid-template-columns: 1fr 1fr 1fr; gap:6px; text-align:center; font-size:0.78rem;">
                   <div style="background:var(--panel-2); padding:4px; border-radius:6px; border:1px solid var(--line);"><span style="color:var(--muted); font-size:0.7rem;">LEVEL</span><br><strong class="num">${level}</strong></div>
-                  <div style="background:var(--panel-2); padding:4px; border-radius:6px; border:1px solid var(--line);"><span style="color:var(--muted); font-size:0.7rem;">POWER</span><br><strong class="num" style="color:var(--gold);">⚡ ${power}</strong></div>
-                  <div style="background:var(--panel-2); padding:4px; border-radius:6px; border:1px solid var(--line);"><span style="color:var(--muted); font-size:0.7rem;">HEALTH</span><br><strong class="num" style="color:var(--bad);">♥ ${health}</strong></div>
+                  <div style="background:var(--panel-2); padding:4px; border-radius:6px; border:1px solid var(--line);"><span style="color:var(--muted); font-size:0.7rem;">POWER</span><br><strong class="num" style="color:var(--gold);">${power}</strong></div>
+                  <div style="background:var(--panel-2); padding:4px; border-radius:6px; border:1px solid var(--line);"><span style="color:var(--muted); font-size:0.7rem;">HEALTH</span><br><strong class="num" style="color:var(--bad);">${health}</strong></div>
+                </div>
+              `
+              : isDiscovered
+              ? `
+                <div class="holo-type" style="color:${tierColor}; font-weight:bold; margin-top:2px;">${typeIcons[combatType] || combatType}</div>
+                <div class="holo-advantage" style="font-size:0.75rem; color:var(--muted); margin-top:2px;">${advantages[combatType] || ''}</div>
+                
+                <div class="holo-meta-row" style="margin-top:8px; display:flex; justify-content:space-between; font-size:0.8rem; background:rgba(100,150,255,0.08); padding:6px 10px; border-radius:6px;">
+                  <div><strong>Species:</strong> <span class="num">#${beast.id}</span></div>
+                  <div><strong>Status:</strong> <span style="color:#7da5ff; font-weight:bold;">DISCOVERED (Untamed)</span></div>
                 </div>
 
-                ${
-                  beast.tokenId
-                    ? `<div style="font-size:0.72rem; color:var(--muted); margin-top:10px; text-align:center;">
-                        <strong>Token ID:</strong> <span class="num font-bold" style="color:var(--gold);">${String(beast.tokenId).slice(0, 10)}…${String(beast.tokenId).slice(-6)}</span>
-                      </div>`
-                    : ''
-                }
+                <p style="font-size:0.78rem; color:var(--muted); margin:10px 0; text-align:center; line-height:1.4;">
+                  Discovered during your Gauntlet adventures! To recruit ${beast.name} as a companion and build its Friendliness bond, spin and tame it in the Roulette Wheel.
+                </p>
               `
               : `
-                ${(beast.isArtathon || Number(beast.id) >= 10000)
-                  ? `<div class="artathon-community-note" style="margin-top:6px; font-size:0.72rem; color:#d8b4fe; background:rgba(164, 92, 255, 0.12); border:1px solid rgba(164, 92, 255, 0.35); border-radius:6px; padding:4px 8px; text-align:center;">
-                      🎨 <strong>Community Artathon Species #${beast.id}</strong>
-                    </div>`
-                  : ''
-                }
                 <p style="font-size:0.8rem; color:var(--muted); margin:12px 0; text-align:center;">
                   ${(beast.isArtathon || Number(beast.id) >= 10000)
                     ? 'Official Starknet Beasts Artathon community submission. Defeat in the Gauntlet or tame in the Roulette Wheel to reveal species name, lore, and stats.'
@@ -112,7 +128,11 @@ export function openCardModal(beast, { isCaught = true, isCompanion = false, isO
             ${
               isCaught
                 ? `<button id="btn-equip-comp" class="btn-primary arcade-btn" style="width:100%; height:46px; font-size:0.92rem;">
-                    ${isCompanion ? '★ Current Active Companion' : '⚔️ Set as Gauntlet Companion'}
+                    ${isCompanion ? '★ Current Active Companion' : 'Set as Gauntlet Companion'}
+                  </button>`
+                : isDiscovered
+                ? `<button class="btn-ghost" disabled style="width:100%; height:46px; font-size:0.85rem; color:var(--muted); border:1px dashed var(--line); cursor:default;">
+                    Tame via Roulette to Recruit
                   </button>`
                 : ''
             }

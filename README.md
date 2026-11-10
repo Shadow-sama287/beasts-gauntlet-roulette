@@ -38,7 +38,7 @@ It merges **Loot Survivor dungeon roguelike combat** with a **high-stakes taming
   - **T3 Rare** (Weight: 4)
   - **T4 Uncommon** (Weight: 8)
   - **T5 Common** (Weight: 15)
-- **Pity System**: Deterministic milestone guarantees (T4 within 5 spins, T3 within 12, T2 within 20, T1 within 30).
+- **Pity System**: Bad-luck protection per `GACHA_CONFIG.pity` (Rare+ T3 guaranteed within 15 spins without one, Legendary T1 guaranteed within 45 spins without one, plus Starr Road progression via duplicate credits).
 - **5 Tier Dynamic Reflex Minigames**:
   - **T1 Legendary — Harmonic Convergence**: Dual energy needles converge from left and right into a central singularity Nexus.
   - **T2 Epic — Dual Ward Lock**: Two-stage consecutive timing strikes to shatter mystical beast wards.

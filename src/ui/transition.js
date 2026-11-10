@@ -36,10 +36,22 @@ function ensureOverlay() {
   return overlayEl;
 }
 
+export function forceDismissTransition() {
+  if (overlayEl) {
+    overlayEl.classList.remove('active', 'slow-load');
+  }
+}
+
 export function trigger8BitTransition(onSwap) {
   // If reduced motion is preferred, swap immediately without visual shutter
   if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    if (onSwap) onSwap();
+    if (onSwap) {
+      try {
+        onSwap();
+      } catch (err) {
+        console.error('Reduced-motion swap error:', err);
+      }
+    }
     return;
   }
 
@@ -60,21 +72,32 @@ export function trigger8BitTransition(onSwap) {
   void overlay.offsetWidth;
   overlay.classList.add('active');
 
-  const startSwapTime = performance.now();
   let swapped = false;
 
-  // Show slow-load coin bar and tips only if stage transition takes > 300ms
+  // Show slow-load coin bar and tips only if stage transition takes > 280ms
   const slowTimer = setTimeout(() => {
     if (!swapped) {
       overlay.classList.add('slow-load');
     }
   }, 280);
 
+  // Hard safety watchdog: guarantee the overlay is never stuck indefinitely!
+  const hardSafetyTimer = setTimeout(() => {
+    overlay.classList.remove('active', 'slow-load');
+  }, 750);
+
   // Shutter closes in ~200ms, perform content swap at mid-point
   setTimeout(() => {
     swapped = true;
     clearTimeout(slowTimer);
-    if (onSwap) onSwap();
+
+    if (onSwap) {
+      try {
+        onSwap();
+      } catch (err) {
+        console.error('Stage swap exception:', err);
+      }
+    }
 
     // Flash at the seam
     const seam = overlay.querySelector('.transition-seam-flash');
@@ -85,6 +108,7 @@ export function trigger8BitTransition(onSwap) {
 
     // Shutters open in reverse, total transition time ~400ms
     setTimeout(() => {
+      clearTimeout(hardSafetyTimer);
       overlay.classList.remove('active', 'slow-load');
     }, 200);
   }, 200);

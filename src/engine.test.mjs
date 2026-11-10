@@ -7,6 +7,7 @@ import {
   playerDamage, beastDamage, elementalDamage, typeMultiplierClass, createGame, explore, attack, flee,
   allocateStat, buyPotion, buyUpgrade, goldReward, levelFromXp, maxHpFor, summary,
   generateDungeonLayout, startDungeon, stepDungeon, isMarketLocked, companionStrike,
+  companionAttackBoostPct, companionDefenseBoostPct, generateProceduralPath,
 } from './engine.js';
 
 const beastData = JSON.parse(readFileSync(new URL('./beasts.json', import.meta.url), 'utf8'));
@@ -181,3 +182,87 @@ test('companion strike: scales with Dojo training bonus', () => {
   assert.equal(rarityStrike, baseStrike);
   assert.ok(!Number.isNaN(rarityStrike));
 });
+
+test('friendliness stat: boosts companion attack and adventurer defense', () => {
+  const companion = { id: 1, name: 'Warlock', tier: 1, type: 'Magical', friendliness: 50 };
+  const beast = { id: 2, name: 'Wolf', tier: 4, type: 'Brute', level: 10 };
+  const armor = { type: 'Hide', tier: 4, level: 10 };
+
+  // Attack boost from friendliness
+  assert.equal(companionAttackBoostPct(50), 50);
+  assert.equal(companionAttackBoostPct(0), 0);
+  assert.equal(companionAttackBoostPct(100), 100);
+
+  const baseStrike = companionStrike({ companion: { ...companion, friendliness: 0 }, level: 5, beast });
+  const friendlyStrike = companionStrike({ companion, level: 5, beast });
+  assert.ok(friendlyStrike > baseStrike, `friendly strike ${friendlyStrike} should exceed base ${baseStrike}`);
+
+  // Defense boost from friendliness (reduces incoming damage)
+  assert.equal(companionDefenseBoostPct(50), 20); // 50 * 0.4 = 20% reduction
+  assert.equal(companionDefenseBoostPct(100), 40); // 100 * 0.4 = 40% reduction
+  assert.equal(companionDefenseBoostPct(0), 0);
+
+  const rawBeastDmg = beastDamage({ beast, armor, defenseBoostPct: 0 });
+  const reducedBeastDmg = beastDamage({ beast, armor, defenseBoostPct: companionDefenseBoostPct(50) });
+  assert.ok(reducedBeastDmg <= rawBeastDmg, `reduced damage ${reducedBeastDmg} <= ${rawBeastDmg}`);
+
+  // Full combat turn incorporates friendliness
+  const g = createGame({ beastData, seed: 77, companionId: 1 });
+  g.companion = companion;
+  g.beast = beast;
+  g.phase = 'battle';
+  const atk = attack(g);
+  assert.equal(atk.friendliness, 50);
+  assert.ok(atk.comp > 0);
+});
+
+test('dungeon 6x6 grid: 36 chambers generated dynamically with row and col coordinates', () => {
+  const layout = generateDungeonLayout({ seed: 999, stepsCount: 36, floor: 1 });
+  assert.equal(layout.length, 36);
+
+  // Check 6x6 grid mapping
+  for (let i = 0; i < 36; i++) {
+    assert.equal(layout[i].row, Math.floor(i / 6));
+    assert.equal(layout[i].col, i % 6);
+  }
+
+  // Last step is boss
+  assert.equal(layout[35].type, 'boss');
+
+  // Dynamic seed produces different layouts
+  const layoutA = generateDungeonLayout({ seed: 100, stepsCount: 36, floor: 1 });
+  const layoutB = generateDungeonLayout({ seed: 200, stepsCount: 36, floor: 1 });
+  assert.notDeepEqual(layoutA, layoutB, 'different seeds must yield different layouts');
+});
+
+test('procedural path: generates 10-12 walkable chambers on 6x6 grid with adjacent steps and boss end', () => {
+  const stepsCount = 12;
+  const path = generateProceduralPath({ seed: 42, stepsCount, rows: 6, cols: 6 });
+  assert.equal(path.length, stepsCount);
+
+  // All coordinates are strictly within 6x6 grid bounds [0..5]
+  for (let i = 0; i < path.length; i++) {
+    assert.ok(path[i].row >= 0 && path[i].row < 6, `row ${path[i].row} out of bounds`);
+    assert.ok(path[i].col >= 0 && path[i].col < 6, `col ${path[i].col} out of bounds`);
+  }
+
+  // Adjacent steps form a contiguous path (Manhattan distance = 1)
+  for (let i = 1; i < path.length; i++) {
+    const dist = Math.abs(path[i].row - path[i - 1].row) + Math.abs(path[i].col - path[i - 1].col);
+    assert.equal(dist, 1, `step ${i} is not adjacent to step ${i - 1}`);
+  }
+
+  // No duplicate cells along path
+  const coordsSet = new Set(path.map((p) => `${p.row},${p.col}`));
+  assert.equal(coordsSet.size, stepsCount);
+
+  // Dungeon layout with 12 steps
+  const layout = generateDungeonLayout({ seed: 42, stepsCount: 12, floor: 1 });
+  assert.equal(layout.length, 12);
+  assert.equal(layout[11].type, 'boss');
+
+  // Verify off-path cells exist on 6x6 grid (36 - 12 = 24 wall/empty cells)
+  assert.equal(coordsSet.size < 36, true);
+});
+
+

@@ -81,18 +81,34 @@ export function playerDamage({ weapon, str, crit, beast }) {
 }
 
 /** Damage a beast deals to the adventurer (min 2). No STR/crit for beasts in this demo. [DESIGN: no crit] */
-export function beastDamage({ beast, armor }) {
+export function beastDamage({ beast, armor, defenseBoostPct = 0 }) {
   const base = beast.level * (6 - beast.tier);
   const elem = elementalDamage(base, beast.type, TYPE_OF_ARMOR[armor.type]);
   const armorBase = armor.level * (6 - armor.tier);
-  return Math.max(2, elem - armorBase);
+  const rawDmg = Math.max(2, elem - armorBase);
+  if (defenseBoostPct > 0) {
+    const reduction = Math.floor(rawDmg * (defenseBoostPct / 100));
+    return Math.max(1, rawDmg - reduction);
+  }
+  return rawDmg;
 }
 
-export function companionStrike({ companion, level, beast, bonusPct = 0 }) {
+export function companionAttackBoostPct(friendliness = 0) {
+  return Math.max(0, Math.min(100, Math.round(Number(friendliness) || 0)));
+}
+
+export function companionDefenseBoostPct(friendliness = 0) {
+  const f = Math.max(0, Math.min(100, Number(friendliness) || 0));
+  return Math.round(f * 0.4); // up to 40% damage reduction at 100% friendliness
+}
+
+export function companionStrike({ companion, level, beast, bonusPct = 0, friendliness = 0 }) {
   if (!companion) return 0;
   const tier = companion.tier || companion.rarity || 5;
   const rawBase = (6 - tier) * DEFAULT_CONFIG.companionBase + level;
-  const base = bonusPct > 0 ? Math.round(rawBase * (1 + bonusPct / 100)) : rawBase;
+  const fVal = companion.friendliness !== undefined ? companion.friendliness : friendliness;
+  const totalBonus = (bonusPct || 0) + companionAttackBoostPct(fVal);
+  const base = totalBonus > 0 ? Math.round(rawBase * (1 + totalBonus / 100)) : rawBase;
   return elementalDamage(base, companion.type, beast.type); // ignores armor [DESIGN]
 }
 
@@ -227,13 +243,18 @@ export function attack(g) {
   const wpn = { ...g.weapon, level: g.level }; // weapon levels with you [DESIGN]
   let dmg = playerDamage({ weapon: wpn, str: g.stats.STR, crit, beast: g.beast });
   const bonusPct = g.companionBonusPct || (g.companion ? g.companion.bonusPct : 0) || 0;
-  const comp = companionStrike({ companion: g.companion, level: g.level, beast: g.beast, bonusPct });
+  const friendliness = g.companion ? (g.companion.friendliness || 0) : 0;
+  const comp = companionStrike({ companion: g.companion, level: g.level, beast: g.beast, bonusPct, friendliness });
   dmg += comp;
   g.beast.hp = Math.max(0, g.beast.hp - dmg);
-  say(g, `You hit ${g.beast.displayName} for ${dmg}${crit ? ' (CRIT!)' : ''}${comp ? ` incl. ${g.companion.name} strike ${comp}${bonusPct ? ` (+${bonusPct}% Dojo boost)` : ''}` : ''}.`);
+  const boostNotes = [];
+  if (friendliness > 0) boostNotes.push(`♥${friendliness}% friend`);
+  if (bonusPct > 0) boostNotes.push(`+${bonusPct}% Dojo`);
+  const boostStr = boostNotes.length > 0 ? ` (${boostNotes.join(', ')})` : '';
+  say(g, `You hit ${g.beast.displayName} for ${dmg}${crit ? ' (CRIT!)' : ''}${comp ? ` incl. ${g.companion.name} strike ${comp}${boostStr}` : ''}.`);
   if (g.beast.hp === 0) return victory(g);
   beastStrike(g);
-  return { kind: 'attack', dmg, crit, comp, companionBonusPct: bonusPct };
+  return { kind: 'attack', dmg, crit, comp, companionBonusPct: bonusPct, friendliness };
 }
 
 export function flee(g) {
@@ -257,9 +278,12 @@ export function flee(g) {
 }
 
 function beastStrike(g) {
-  const dmg = beastDamage({ beast: g.beast, armor: { ...g.armor, level: g.level } });
+  const friendliness = g.companion ? (g.companion.friendliness || 0) : 0;
+  const defBoost = companionDefenseBoostPct(friendliness);
+  const dmg = beastDamage({ beast: g.beast, armor: { ...g.armor, level: g.level }, defenseBoostPct: defBoost });
   g.hp = Math.max(0, g.hp - dmg);
-  say(g, `${g.beast.displayName} hits you for ${dmg}.`);
+  const guardNote = defBoost > 0 && g.companion ? ` [${g.companion.name} guarded -${defBoost}% dmg]` : '';
+  say(g, `${g.beast.displayName} hits you for ${dmg}.${guardNote}`);
   if (g.hp === 0) die(g, g.beast.displayName);
 }
 
@@ -367,8 +391,83 @@ export function buyUpgrade(g, slot) {
 
 // ---------- Deterministic Dungeon Generator & Progression ----------
 
+/**
+ * Procedurally generates a self-avoiding walkable path across a 6x6 grid.
+ * Path starts in the top-left area and winds towards the boss chamber near bottom-right.
+ * Returns an array of { row, col } coordinates of length stepsCount (e.g. 10–12 steps).
+ */
+export function generateProceduralPath({ seed, stepsCount = 12, rows = 6, cols = 6 }) {
+  if (stepsCount >= rows * cols) {
+    const full = [];
+    for (let i = 0; i < stepsCount; i++) {
+      full.push({ row: Math.floor(i / cols), col: i % cols });
+    }
+    return full;
+  }
+
+  const rng = mulberry32((seed ^ 0x9e3779b9) >>> 0);
+  const DIRS = [
+    [0, 1],   // right
+    [1, 0],   // down
+    [0, -1],  // left
+    [-1, 0],  // up
+  ];
+
+  // Dynamic starting position near top-left (row 0..1, col 0..1)
+  const startR = Math.floor(rng() * 2);
+  const startC = Math.floor(rng() * 2);
+
+  const path = [];
+  const visited = new Set();
+
+  function dfs(r, c) {
+    path.push({ row: r, col: c });
+    visited.add(`${r},${c}`);
+
+    if (path.length === stepsCount) return true;
+
+    // Pick directions with preference towards bottom-right (5, 5) with slight random jitter.
+    // Calculate weights first to ensure a deterministic, anti-symmetric sort comparator.
+    const weightedDirs = DIRS.map(([dr, dc]) => {
+      const dist = Math.hypot((r + dr) - (rows - 1), (c + dc) - (cols - 1));
+      const jitter = (rng() - 0.5) * 1.8;
+      return { dr, dc, weight: dist + jitter };
+    });
+    weightedDirs.sort((a, b) => a.weight - b.weight);
+
+    for (const { dr, dc } of weightedDirs) {
+      const nr = r + dr;
+      const nc = c + dc;
+      if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && !visited.has(`${nr},${nc}`)) {
+        if (dfs(nr, nc)) return true;
+      }
+    }
+
+    path.pop();
+    visited.delete(`${r},${c}`);
+    return false;
+  }
+
+  const found = dfs(startR, startC);
+  if (!found || path.length < stepsCount) {
+    // Fallback serpentine path across the grid
+    const fallback = [];
+    let r = 0, c = 0, dir = 1;
+    for (let i = 0; i < stepsCount; i++) {
+      fallback.push({ row: r, col: c });
+      c += dir;
+      if (c >= cols) { c = cols - 1; r++; dir = -1; }
+      else if (c < 0) { c = 0; r++; dir = 1; }
+    }
+    return fallback;
+  }
+
+  return path;
+}
+
 export function generateDungeonLayout({ seed, stepsCount = 12, floor = 1 }) {
   const rng = mulberry32((seed ^ (floor * 0x654321)) >>> 0);
+  const coords = generateProceduralPath({ seed: seed ^ (floor * 0x3344), stepsCount, rows: 6, cols: 6 });
   const steps = [];
   // Chambers 0 to stepsCount - 2: distributed between beast, trap, discovery
   for (let i = 0; i < stepsCount - 1; i++) {
@@ -376,15 +475,28 @@ export function generateDungeonLayout({ seed, stepsCount = 12, floor = 1 }) {
     let type = 'beast';
     if (r < 0.55) {
       type = 'beast';
-    } else if (r < 0.85) {
+    } else if (r < 0.82) {
       type = 'trap';
     } else {
       type = 'discovery';
     }
-    steps.push({ index: i, type, visited: false });
+    steps.push({
+      index: i,
+      row: coords[i] ? coords[i].row : Math.floor(i / 6),
+      col: coords[i] ? coords[i].col : i % 6,
+      type,
+      visited: false,
+    });
   }
   // Chamber stepsCount - 1 (last chamber) is ALWAYS boss
-  steps.push({ index: stepsCount - 1, type: 'boss', visited: false });
+  const lastCoord = coords[stepsCount - 1] || { row: Math.floor((stepsCount - 1) / 6), col: (stepsCount - 1) % 6 };
+  steps.push({
+    index: stepsCount - 1,
+    row: lastCoord.row,
+    col: lastCoord.col,
+    type: 'boss',
+    visited: false,
+  });
   return steps;
 }
 
@@ -407,12 +519,15 @@ export function spawnBoss(g, floor = 1) {
   return boss;
 }
 
-export function startDungeon(g, { stepsCount = 12, floor = 1 } = {}) {
-  const seed = (g.seed ^ (floor * 0x7f4a7c15)) >>> 0;
-  const steps = generateDungeonLayout({ seed, stepsCount, floor });
+export function startDungeon(g, { stepsCount = 12, floor = 1, seed = null } = {}) {
+  // Ensure each dungeon entry has a deterministic dynamic seed derived from game seed and RNG
+  const dynamicSeed = seed !== null
+    ? seed
+    : ((g.seed ^ (floor * 0x7f4a7c15) ^ Math.floor(g.rng() * 0xffffff)) >>> 0);
+  const steps = generateDungeonLayout({ seed: dynamicSeed, stepsCount, floor });
   g.dungeon = {
     floor,
-    seed,
+    seed: dynamicSeed,
     stepIndex: 0,
     stepsCount,
     steps,
@@ -421,7 +536,7 @@ export function startDungeon(g, { stepsCount = 12, floor = 1 } = {}) {
     loot: { gold: 0, xp: 0, kills: 0, captured: [] },
   };
   g.phase = 'explore';
-  say(g, `Floor ${floor} entered! ${stepsCount} chambers await. Boss lurks in chamber ${stepsCount}.`);
+  say(g, `Floor ${floor} entered! ${stepsCount} chambers await in 6×6 labyrinth. Boss lurks in chamber ${stepsCount}.`);
   return g.dungeon;
 }
 

@@ -20,16 +20,24 @@ import {
   getPityStatus,
   claimCreditTrackBeast,
 } from './roulette.js';
-import { trigger8BitTransition } from './ui/transition.js';
+import { trigger8BitTransition, forceDismissTransition } from './ui/transition.js';
+import { renderErrorRecovery } from './ui/errorBoundary.js';
 import { createSettingsView } from './ui/settings.js';
 import { loadBeasts, handleArtError, artForBeast } from './beastLoader.js';
 import { loadAlbum, saveAlbum, clearAlbum } from './albumStorage.js';
-import { drawWheel, preloadBeastImages } from './ui/wheelCanvas.js';
+import { preloadBeastImages } from './ui/wheelCanvas.js';
+import {
+  isGauntletLocked,
+  isDojoLocked,
+  isFirstSpin,
+  getFirstSpinBeast,
+  unlockFirstCompanion,
+  createFreshAlbumState,
+} from './firstRunGate.js';
+import { mountFullScreenMinigame } from './minigames/framework.js';
 import {
   playTick,
   playPulseSound,
-  playWardHit,
-  playConvergencePulse,
   playCatchSound,
   playMissSound,
   playGoodSound,
@@ -37,17 +45,12 @@ import {
   playPerfectSound,
   playRevealSting,
   sfx,
-  toggleSound,
-  isSoundEnabled,
 } from './audio.js';
 import { createGauntletView } from './ui/gauntlet.js';
 import { createDojoView } from './ui/dojo.js';
 import { createJukeboxView } from './ui/jukebox.js';
 import { openCardModal, closeCardModal } from './ui/cardModal.js';
 import { initParticles } from './ui/particles.js';
-import { MINIGAMES, getGameById } from './minigames/registry.js';
-import { pickGame } from './minigames/pick.js';
-import { executeMiniGameWithFlow } from './minigames/sharedFlow.js';
 import { createReel } from './ui/reelStrip.js';
 import { wallet, truncateAddress, NETWORK_NAME } from './chain/wallet.js';
 import { loadCachedOwnership, checkRosterOwnership } from './chain/ownership.js';
@@ -59,14 +62,10 @@ import { SEPOLIA } from './onchain.js';
 let beasts = [];
 let albumData = { caughtIds: [], caughtAt: {}, capturedNamed: [], activeCompanionId: null };
 let state = null;
-let currentScreen = 'title'; // 'title' | 'wheel' | 'tame' | 'album' | 'end' | 'gauntlet' | 'dojo' | 'jukebox'
-let currentSpinResult = null; // { beast, targetAngle, slice, luckyActive }
-let tameMinigame = null; // { markerPos, direction, speed, zone, animId, active, luckyActive }
-let autoSpinEnabled = false;
-let autoSpinTimeout = null;
+let currentScreen = 'title'; // 'title' | 'wheel' | 'tame' | 'album' | 'end' | 'gauntlet' | 'dojo' | 'settings'
+let currentSpinResult = null; // { beast, targetAngle, slice, luckyActive, spinSeedInfo }
+let quickSpinEnabled = false;
 let albumFilter = 'all'; // 'all' | '1' | '2' | '3' | '4' | '5'
-let gameHistory = [];
-let currentActiveGame = null;
 let activeReelHandle = null;
 let currentDifficulty = 1.0;
 let currentLatencyMs = 0;
@@ -77,18 +76,15 @@ let currentSpinSeedInfo = null;
 
 const urlParams = new URLSearchParams(window.location.search);
 const isDebugMode = urlParams.has('debug');
-const debugGameParam = urlParams.get('game');
-const debugTierParam = Number(urlParams.get('tier')) || 3;
-const debugTypeParam = urlParams.get('type') || 'Hunter';
 
 const appEl = document.getElementById('app');
 
 function getActiveCompanion() {
-  if (albumData.activeCompanionId) {
-    const found = beasts.find((b) => b.id === albumData.activeCompanionId);
+  if (albumData && albumData.activeCompanionId) {
+    const found = beasts.find((b) => String(b.id) === String(albumData.activeCompanionId));
     if (found) return found;
   }
-  return beasts[0] || null;
+  return null;
 }
 
 // Initialize application
@@ -103,12 +99,12 @@ async function init() {
     beasts,
     seed: Date.now() ^ 0xbeaf,
     owned: new Set(albumData.caughtIds),
-    spinsMax: 25,
+    spinsMax: 30,
     hearts: 3,
     essence: 0,
   });
 
-  // Initialize background verifiable block refresh
+  // Background verifiable block refresh
   triggerBlockRefresh();
 
   // Listen to Starknet wallet state changes
@@ -119,7 +115,7 @@ async function init() {
       const res = await checkRosterOwnership({ beasts, userAddress: st.address });
       if (res.ownedIds && res.ownedIds.size > 0) {
         ownedOnchainSet = res.ownedIds;
-        showToast(`🦊 Synced Starknet Sepolia beasts: ${ownedOnchainSet.size} owned!`);
+        showToast(`Synced Starknet Sepolia beasts: ${ownedOnchainSet.size} owned!`);
         render();
       }
     } else {
@@ -129,28 +125,6 @@ async function init() {
   });
 
   window.addEventListener('keydown', handleGlobalKeydown);
-  window.addEventListener('resize', () => {
-    if (currentScreen === 'wheel') renderWheelScreenCanvas();
-  });
-
-  // Direct game launcher support: ?debug=1&game=netToss&tier=3&type=Hunter
-  if (debugGameParam) {
-    const dummyBeast = {
-      id: 'debug-target',
-      name: `${debugGameParam.toUpperCase()}`,
-      rarity: debugTierParam,
-      tier: debugTierParam,
-      type: debugTypeParam,
-      art: artForBeast(debugTierParam) || generateSigilDataUri('debug', debugGameParam, debugTierParam),
-    };
-    currentSpinResult = {
-      beast: dummyBeast,
-      luckyActive: false,
-      pityTriggered: false,
-    };
-    goToScreen('tame');
-    return;
-  }
 
   render();
 }
@@ -166,18 +140,19 @@ function handleGlobalKeydown(e) {
     }
   }
 
-  // Minigame input ownership lock: ignore space/enter so it doesn't trigger "Continue"
-  if (window.__tameInputLocked) {
-    if (e.code === 'Space') {
-      e.preventDefault();
-    }
+  if (currentScreen === 'tame') {
+    // In minigame, framework handles space
     return;
   }
 
   if (e.code === 'Space') {
     e.preventDefault();
     if (currentScreen === 'title') {
-      goToScreen('gauntlet');
+      if (isGauntletLocked(albumData)) {
+        goToScreen('wheel');
+      } else {
+        goToScreen('gauntlet');
+      }
     } else if (currentScreen === 'wheel') {
       if (activeReelHandle && activeReelHandle.isSpinning()) {
         activeReelHandle.fastForward();
@@ -185,15 +160,7 @@ function handleGlobalKeydown(e) {
         const spinBtn = document.getElementById('btn-spin');
         if (spinBtn && !spinBtn.disabled) spinBtn.click();
       }
-    } else if (currentScreen === 'tame') {
-      const continueBtn = document.getElementById('btn-continue');
-      if (continueBtn && !continueBtn.disabled) continueBtn.click();
     } else if (currentScreen === 'gauntlet') {
-      const statBtn = document.querySelector('.stat-alloc-btn');
-      if (statBtn) {
-        statBtn.click();
-        return;
-      }
       const atkBtn = document.getElementById('btn-attack');
       const expBtn = document.getElementById('btn-explore');
       const startG = document.getElementById('btn-start-gauntlet');
@@ -232,109 +199,110 @@ function showToast(msg) {
   toast.textContent = msg;
   toast.setAttribute('role', 'status');
   document.body.appendChild(toast);
-  setTimeout(() => toast.remove(), 2000);
+  setTimeout(() => toast.remove(), 2200);
 }
 
 function goToScreen(screen) {
   closeCardModal();
-  if (autoSpinTimeout) clearTimeout(autoSpinTimeout);
-  if (tameMinigame && tameMinigame.animId) cancelAnimationFrame(tameMinigame.animId);
+
+  // First-run gate guard
+  if ((screen === 'gauntlet' || screen === 'dojo') && isGauntletLocked(albumData)) {
+    showToast(`Tame your first beast in the Roulette to unlock the ${screen === 'gauntlet' ? 'Gauntlet' : 'Dojo'}!`);
+    screen = 'wheel';
+  }
 
   trigger8BitTransition(() => {
     currentScreen = screen;
     render();
-
-    if (currentScreen === 'wheel') {
-      requestAnimationFrame(() => {
-        renderWheelScreenCanvas();
-        if (autoSpinEnabled && !state.gameOver) {
-          autoSpinTimeout = setTimeout(() => {
-            const btn = document.getElementById('btn-spin');
-            if (btn && !btn.disabled) btn.click();
-          }, 600);
-        }
-      });
-    }
   });
 }
 
-// ----------------- RENDER ENGINE -----------------
+// ----------------- RENDER ENGINE WITH ERROR BOUNDARY -----------------
 
 function render() {
-  appEl.innerHTML = '';
+  try {
+    appEl.innerHTML = '';
 
-  // Render Debug Toolbar if ?debug=1
-  if (isDebugMode) {
-    appEl.appendChild(createDebugPanel());
+    // Render Debug Toolbar if ?debug=1
+    if (isDebugMode) {
+      appEl.appendChild(createDebugPanel());
+    }
+
+    // Toggle bottom navigation
+    if (currentScreen === 'tame') {
+      document.body.classList.add('hide-bottom-nav');
+    } else if (currentScreen !== 'gauntlet' && currentScreen !== 'dojo') {
+      document.body.classList.remove('hide-bottom-nav');
+    }
+
+    let screenEl;
+    switch (currentScreen) {
+      case 'title':
+        screenEl = createTitleScreen();
+        break;
+      case 'wheel':
+        screenEl = createWheelScreen();
+        break;
+      case 'tame':
+        screenEl = createTameScreen();
+        break;
+      case 'gauntlet':
+        screenEl = createGauntletView({
+          companion: getActiveCompanion(),
+          beasts,
+          albumData,
+          onSelectCompanion: (chosen) => {
+            albumData.activeCompanionId = String(chosen.id);
+            saveAlbum(albumData);
+          },
+          onExit: () => goToScreen('title'),
+          onCaptureNamed: handleNamedCapture,
+          onDungeonStateChange: (inDungeon) => {
+            document.body.classList.toggle('hide-bottom-nav', inDungeon);
+          },
+        });
+        break;
+      case 'dojo':
+        screenEl = createDojoView({
+          companion: getActiveCompanion(),
+          onReward: handleDojoReward,
+          onExit: () => goToScreen('title'),
+          onEnterGauntlet: () => goToScreen('gauntlet'),
+        });
+        break;
+      case 'settings':
+      case 'jukebox':
+        screenEl = createSettingsView({
+          onExit: () => goToScreen('title'),
+        });
+        break;
+      case 'album':
+        screenEl = createAlbumScreen();
+        break;
+      case 'end':
+        screenEl = createEndScreen();
+        break;
+      default:
+        screenEl = createTitleScreen();
+    }
+
+    appEl.appendChild(screenEl);
+
+    // Fixed bottom tab bar on all scenes except full-screen minigame
+    if (currentScreen !== 'tame') {
+      appEl.appendChild(createBottomTabBar());
+    }
+  } catch (err) {
+    console.error('Fatal render error:', err);
+    forceDismissTransition();
+    renderErrorRecovery(appEl, err, {
+      onRetry: () => render(),
+      onReset: () => {
+        currentScreen = 'title';
+        render();
+      },
+    });
   }
-
-  // Render Roulette Status Bar on wheel & tame screens
-  if (currentScreen === 'wheel' || currentScreen === 'tame') {
-    appEl.appendChild(createStatusBar());
-  }
-
-  // Render specific screen
-  let screenEl;
-  if (currentScreen === 'tame') {
-    document.body.classList.add('hide-bottom-nav');
-  } else if (currentScreen !== 'gauntlet' && currentScreen !== 'dojo') {
-    document.body.classList.remove('hide-bottom-nav');
-  }
-
-  switch (currentScreen) {
-    case 'title':
-      screenEl = createTitleScreen();
-      break;
-    case 'wheel':
-      screenEl = createWheelScreen();
-      break;
-    case 'tame':
-      screenEl = createTameScreen();
-      break;
-    case 'gauntlet':
-      screenEl = createGauntletView({
-        companion: getActiveCompanion(),
-        beasts,
-        albumData,
-        onSelectCompanion: (chosen) => {
-          albumData.activeCompanionId = chosen.id;
-          saveAlbum(albumData);
-        },
-        onExit: () => goToScreen('title'),
-        onCaptureNamed: handleNamedCapture,
-        onDungeonStateChange: (inDungeon) => {
-          document.body.classList.toggle('hide-bottom-nav', inDungeon);
-        },
-      });
-      break;
-    case 'dojo':
-      screenEl = createDojoView({
-        companion: getActiveCompanion(),
-        onReward: handleDojoReward,
-        onExit: () => goToScreen('title'),
-        onEnterGauntlet: () => goToScreen('gauntlet'),
-      });
-      break;
-    case 'settings':
-    case 'jukebox':
-      screenEl = createSettingsView({
-        onExit: () => goToScreen('title'),
-      });
-      break;
-    case 'album':
-      screenEl = createAlbumScreen();
-      break;
-    case 'end':
-      screenEl = createEndScreen();
-      break;
-    default:
-      screenEl = createTitleScreen();
-  }
-
-  appEl.appendChild(screenEl);
-
-  // Render fixed bottom tab bar on all scenes
-  appEl.appendChild(createBottomTabBar());
 }
 
 function createDebugPanel() {
@@ -342,17 +310,12 @@ function createDebugPanel() {
   panel.className = 'debug-panel';
   panel.innerHTML = `
     <div class="debug-row">
-      <span style="color:var(--gold); font-weight:bold;">🛠️ DEBUG TOOLBAR</span>
+      <span style="color:var(--gold); font-weight:bold;">DEBUG TOOLBAR</span>
       <span>Seed: ${state ? state.seed : 42}</span>
-      <span>Game: <strong>${currentActiveGame ? currentActiveGame.id : 'picker'}</strong></span>
     </div>
     <div class="debug-row">
       <label>Difficulty (${currentDifficulty.toFixed(2)}):</label>
       <input type="range" class="debug-slider" min="0.7" max="1.3" step="0.05" value="${currentDifficulty}" id="slider-diff" style="flex:1;" />
-    </div>
-    <div class="debug-row">
-      <label>Latency (${currentLatencyMs}ms):</label>
-      <input type="range" class="debug-slider" min="0" max="120" step="5" value="${currentLatencyMs}" id="slider-latency" style="flex:1;" />
     </div>
   `;
 
@@ -363,22 +326,17 @@ function createDebugPanel() {
     if (label) label.textContent = `Difficulty (${currentDifficulty.toFixed(2)}):`;
   };
 
-  const sliderLat = panel.querySelector('#slider-latency');
-  sliderLat.oninput = (e) => {
-    currentLatencyMs = parseInt(e.target.value, 10);
-    const label = panel.querySelector('.debug-row:nth-child(3) label');
-    if (label) label.textContent = `Latency (${currentLatencyMs}ms):`;
-  };
-
   return panel;
 }
 
 function handleNamedCapture(namedBeast) {
   const idStr = String(namedBeast.id);
-  if (!albumData.caughtIds.includes(idStr)) {
-    albumData.caughtIds.push(idStr);
+  // In Gauntlet camp the new beast that appear must be given status as discovered and not as tamed.
+  // You can only tame and get new beasts through roulette.
+  if (!albumData.discoveredIds) albumData.discoveredIds = [];
+  if (!albumData.discoveredIds.includes(idStr)) {
+    albumData.discoveredIds.push(idStr);
   }
-  albumData.caughtAt[idStr] = Date.now();
 
   if (!albumData.capturedNamed) albumData.capturedNamed = [];
   if (!albumData.capturedNamed.some((c) => c.id === idStr && c.prefix === namedBeast.prefix)) {
@@ -393,21 +351,27 @@ function handleNamedCapture(namedBeast) {
     });
   }
 
-  state.owned.add(idStr);
   saveAlbum(albumData);
-  showToast(`★ NAMED CAPTURE: ${namedBeast.prefix || ''} ${namedBeast.name} added to Beast Dex!`);
 }
 
-function handleDojoReward({ essence, gold, strikeBonusPct }) {
+function handleDojoReward({ essence, gold, strikeBonusPct, friendlinessGain, newFriendliness, companionId }) {
+  // Sync latest album data from storage to avoid clobbering persisted stats
+  const freshAlbum = loadAlbum();
+  albumData = freshAlbum;
   state.essence = Math.min(10, state.essence + (essence || 1));
   if (strikeBonusPct) {
     albumData.companionStrikeBonus = strikeBonusPct;
   }
-  showToast(`🥋 Dojo Master: +${strikeBonusPct || 10}% Gauntlet Strike Bonus! (+${essence || 1} Essence, +${gold || 20} Gold)`);
+  if (companionId && newFriendliness !== undefined) {
+    if (!albumData.friendliness) albumData.friendliness = {};
+    albumData.friendliness[String(companionId)] = newFriendliness;
+  }
+  const fMsg = friendlinessGain ? ` · ♥ Companion Friendliness: ${newFriendliness}% (+${friendlinessGain}%)` : '';
+  showToast(`Dojo Master: +${strikeBonusPct || 10}% Gauntlet Strike Bonus${fMsg}! (+${essence || 1} Essence, +${gold || 20} Gold)`);
   saveAlbum(albumData);
 }
 
-// ----------------- FIXED BOTTOM TAB NAVIGATION & STATUS -----------------
+// ----------------- FIXED BOTTOM TAB NAVIGATION -----------------
 
 function createBottomTabBar() {
   const nav = document.createElement('nav');
@@ -415,6 +379,7 @@ function createBottomTabBar() {
   nav.setAttribute('aria-label', 'Main Navigation');
 
   const dexCount = albumData.caughtIds.length;
+  const isLocked = isGauntletLocked(albumData);
 
   nav.innerHTML = `
     <div class="bottom-tab-items">
@@ -427,16 +392,14 @@ function createBottomTabBar() {
         <span class="tab-btn-label">Home</span>
       </button>
 
-      <button class="bottom-tab-btn ${currentScreen === 'gauntlet' ? 'active' : ''}" data-screen="gauntlet" aria-label="Gauntlet">
+      <button class="bottom-tab-btn ${currentScreen === 'gauntlet' ? 'active' : ''} ${isLocked ? 'locked-tab' : ''}" data-screen="gauntlet" aria-label="Gauntlet">
         <span class="tab-svg-icon">
-          <svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor">
-            <path d="M14 1l-1 2-5 5-2-2 5-5 2-1 1 1zM2 13l2-1 2 2-1 2-2-1-1-2zm1-2l6-6 1 1-6 6-1-1zm8 2l2 2-1 1-2-2 1-1zM1 14l1-1 1 1-1 1-1-1z"/>
-          </svg>
+          ${isLocked ? `<svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor"><path d="M4 6V4a4 4 0 018 0v2h1a1 1 0 011 1v7a1 1 0 01-1 1H2a1 1 0 01-1-1V7a1 1 0 011-1h2zm2-2a2 2 0 114 0v2H6V4z"/></svg>` : `<svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor"><path d="M14 1l-1 2-5 5-2-2 5-5 2-1 1 1zM2 13l2-1 2 2-1 2-2-1-1-2zm1-2l6-6 1 1-6 6-1-1zm8 2l2 2-1 1-2-2 1-1zM1 14l1-1 1 1-1 1-1-1z"/></svg>`}
         </span>
-        <span class="tab-btn-label">Gauntlet</span>
+        <span class="tab-btn-label">${isLocked ? 'Locked' : 'Gauntlet'}</span>
       </button>
 
-      <button class="bottom-tab-btn ${currentScreen === 'wheel' || currentScreen === 'tame' ? 'active' : ''}" data-screen="wheel" aria-label="Roulette">
+      <button class="bottom-tab-btn ${currentScreen === 'wheel' ? 'active' : ''}" data-screen="wheel" aria-label="Roulette">
         <span class="tab-svg-icon">
           <svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor">
             <path d="M2 2h12v12H2V2zm2 2v8h8V4H4zm2 2h1v4H6V6zm3 0h1v4H9V6z"/>
@@ -445,13 +408,11 @@ function createBottomTabBar() {
         <span class="tab-btn-label">Roulette</span>
       </button>
 
-      <button class="bottom-tab-btn ${currentScreen === 'dojo' ? 'active' : ''}" data-screen="dojo" aria-label="Dojo">
+      <button class="bottom-tab-btn ${currentScreen === 'dojo' ? 'active' : ''} ${isLocked ? 'locked-tab' : ''}" data-screen="dojo" aria-label="Dojo">
         <span class="tab-svg-icon">
-          <svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor">
-            <path d="M1 2h14v2H1V2zm2 3h10v1H3V5zm1 2h2v7H4V7zm6 0h2v7h-2V7zm-4 1h4v1H6V8z"/>
-          </svg>
+          ${isLocked ? `<svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor"><path d="M4 6V4a4 4 0 018 0v2h1a1 1 0 011 1v7a1 1 0 01-1 1H2a1 1 0 01-1-1V7a1 1 0 011-1h2zm2-2a2 2 0 114 0v2H6V4z"/></svg>` : `<svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor"><path d="M1 2h14v2H1V2zm2 3h10v1H3V5zm1 2h2v7H4V7zm6 0h2v7h-2V7zm-4 1h4v1H6V8z"/></svg>`}
         </span>
-        <span class="tab-btn-label">Dojo</span>
+        <span class="tab-btn-label">${isLocked ? 'Locked' : 'Dojo'}</span>
       </button>
 
       <button class="bottom-tab-btn ${currentScreen === 'album' ? 'active' : ''}" data-screen="album" aria-label="Dex">
@@ -477,6 +438,11 @@ function createBottomTabBar() {
   nav.querySelectorAll('.bottom-tab-btn').forEach((btn) => {
     btn.onclick = () => {
       const target = btn.dataset.screen;
+      if (isLocked && (target === 'gauntlet' || target === 'dojo')) {
+        showToast(`Tame your first beast in the Roulette to unlock the ${target === 'gauntlet' ? 'Gauntlet' : 'Dojo'}!`);
+        goToScreen('wheel');
+        return;
+      }
       if (target !== currentScreen) {
         goToScreen(target);
       }
@@ -486,61 +452,15 @@ function createBottomTabBar() {
   return nav;
 }
 
-function createStatusBar() {
-  const bar = document.createElement('header');
-  bar.className = 'status-bar';
-
-  // 1. Spins Counter with thin progress bar
-  const spinsWrap = document.createElement('div');
-  spinsWrap.className = 'stat-chip';
-  const remainingSpins = Math.max(0, state.spinsMax - state.spinsUsed);
-  const spinPct = Math.min(100, (state.spinsUsed / state.spinsMax) * 100);
-  spinsWrap.innerHTML = `
-    <span class="stat-label">Free Spins <span class="num font-bold" style="color:var(--gold);">${remainingSpins} left</span></span>
-    <div class="meter-track" style="width:100%; height:4px; margin-top:3px;">
-      <div class="meter-fill" style="width:${spinPct}%; background:var(--gold);"></div>
-    </div>
-  `;
-
-  // 2. Essence 10-segments Bar
-  const essenceWrap = document.createElement('div');
-  essenceWrap.className = 'essence-meter-wrap stat-chip';
-  const isLucky = state.essence >= 10 || state.luckyActive;
-  essenceWrap.innerHTML = `
-    <div style="display:flex; justify-content:space-between; width:100%; margin-bottom:2px;">
-      <span class="stat-label">Essence ${state.essence}/10</span>
-      ${isLucky ? '<span style="font-size:0.65rem; color:var(--gold); font-weight:bold;">LUCKY!</span>' : ''}
-    </div>
-    <div class="essence-segments">
-      ${[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-        .map((i) => `<div class="essence-seg ${i < state.essence ? (isLucky ? 'filled lucky' : 'filled') : ''}"></div>`)
-        .join('')}
-    </div>
-  `;
-
-  // 3. Bestiary Credits (Deterministic Spine)
-  const creditsWrap = document.createElement('div');
-  creditsWrap.className = 'stat-chip';
-  creditsWrap.innerHTML = `
-    <span class="stat-label">Bestiary Credits</span>
-    <span class="num font-bold" style="color:var(--gold); font-size:1rem; margin-top:2px;">🪙 ${state.credits || 0}</span>
-  `;
-
-  bar.appendChild(spinsWrap);
-  bar.appendChild(essenceWrap);
-  bar.appendChild(creditsWrap);
-
-  return bar;
-}
-
-// ----------------- 1. TITLE SCREEN (FULL-SCREEN ARCADE ATTRACT) -----------------
+// ----------------- 1. TITLE SCREEN -----------------
 
 function createTitleScreen() {
   const wrap = document.createElement('div');
   wrap.className = 'screen title-arcade-scene';
 
+  const isLocked = isGauntletLocked(albumData);
   const companion = getActiveCompanion();
-  const companionArt = companion ? (companion.art || artForBeast(companion.id)) : '/beasts/art/1.svg';
+  const companionArt = companion ? (artForBeast(companion.id) || companion.art || `/beasts/art/${companion.id}.svg`) : null;
   const dexCount = albumData.caughtIds.length;
   const totalCount = beasts.length;
   const remainingSpins = Math.max(0, state.spinsMax - state.spinsUsed);
@@ -550,7 +470,7 @@ function createTitleScreen() {
     <div class="title-top-hud">
       <div class="title-hud-chip">
         <span class="hud-chip-label">CREDITS</span>
-        <span class="hud-chip-val num" style="color:var(--gold);">🪙 ${state.credits || 0}</span>
+        <span class="hud-chip-val num" style="color:var(--gold);">${state.credits || 0} CR</span>
       </div>
       <div class="title-hud-chip">
         <span class="hud-chip-label">SPINS LEFT</span>
@@ -571,72 +491,161 @@ function createTitleScreen() {
       <div class="title-arcade-subheading">& ROULETTE</div>
     </div>
 
-    <!-- Centerpiece: Large Animated Companion Beast -->
+    <!-- Centerpiece -->
     <div class="title-companion-centerpiece">
       <div class="title-companion-aura"></div>
-      <div class="title-companion-frame" id="title-comp-frame" style="cursor:pointer;" title="Tap to inspect or change companion">
-        <img id="title-hero-comp-img" src="${companionArt}" alt="${companion?.name || 'Companion'}" class="title-hero-beast-sprite bounce-idle" />
-        <div class="title-comp-chip">
-          <span style="color:var(--gold);">★</span>
-          <span>${companion ? companion.name : 'Choose Ally'}</span>
-          <span style="font-size:0.65rem; color:var(--muted); margin-left:3px;">(TAP)</span>
+      ${isLocked ? `
+        <div class="title-companion-frame locked-attract-frame" id="title-comp-frame" style="cursor:pointer;" title="Spin the roulette to tame your first beast!">
+          <div class="locked-attract-q">?</div>
+          <div class="title-comp-chip">
+            <span style="color:var(--muted);">No Companion Yet</span>
+          </div>
         </div>
-      </div>
-      <div class="arcade-attract-pulse">★ TAP TO START ★</div>
+        <div class="arcade-attract-pulse">★ SPIN ROULETTE TO TAME FIRST ALLY ★</div>
+      ` : `
+        <div class="title-companion-frame" id="title-comp-frame" style="cursor:pointer;" title="Tap to inspect active companion">
+          <img id="title-hero-comp-img" src="${companionArt}" alt="${companion.name}" class="title-hero-beast-sprite bounce-idle" />
+          <div class="title-comp-chip">
+            <span style="color:var(--gold);">★</span>
+            <span>${companion.name}</span>
+            <span style="font-size:0.65rem; color:var(--muted); margin-left:3px;">(TAP)</span>
+          </div>
+        </div>
+        <div class="arcade-attract-pulse">★ TAP TO ENTER GAUNTLET ★</div>
+      `}
     </div>
 
-    <!-- Primary Action Buttons in Thumb Zone -->
+    <!-- Action Buttons in Thumb Zone -->
     <div class="title-arcade-actions">
-      <button id="btn-start-gauntlet-main" class="btn-primary arcade-primary-btn" style="height:52px; font-size:1.15rem; width:100%;">
-        ⚔️ ENTER THE GAUNTLET
-      </button>
-      <button id="btn-start-roulette-main" class="btn-ghost arcade-secondary-btn" style="height:48px; width:100%; border:2px solid var(--gold); color:var(--gold);">
-        🎰 SPIN THE WHEEL
-      </button>
+      ${isLocked ? `
+        <button id="btn-start-roulette-main" class="btn-primary arcade-primary-btn" style="height:54px; font-size:1.15rem; width:100%;">
+          SPIN THE ROULETTE
+        </button>
+        <button id="btn-start-gauntlet-locked" class="btn-ghost" style="height:46px; width:100%; opacity:0.55; border:1px solid var(--line); color:var(--muted); font-size:0.88rem;">
+          [LOCKED] GAUNTLET
+        </button>
+      ` : `
+        <button id="btn-start-gauntlet-main" class="btn-primary arcade-primary-btn" style="height:52px; font-size:1.15rem; width:100%;">
+          ENTER THE GAUNTLET
+        </button>
+        <button id="btn-start-roulette-main" class="btn-ghost arcade-secondary-btn" style="height:48px; width:100%; border:2px solid var(--gold); color:var(--gold);">
+          SPIN THE ROULETTE
+        </button>
+      `}
     </div>
   `;
 
-  const compImg = wrap.querySelector('#title-hero-comp-img');
-  if (compImg && companion) {
-    compImg.onerror = () => handleArtError(compImg, companion);
-  }
-
-  wrap.querySelector('#title-comp-frame').onclick = () => {
-    if (companion) {
-      openCardModal(companion, {
-        isCaught: true,
-        isCompanion: true,
-        isOwnedOnchain: ownedOnchainSet.has(String(companion.id)),
-        onSelectCompanion: (selected) => {
-          albumData.activeCompanionId = selected.id;
-          saveAlbum(albumData);
-          render();
-        },
-      });
-    } else {
-      goToScreen('album');
-    }
-  };
-
   wrap.querySelector('#title-chip-dex').onclick = () => goToScreen('album');
-  wrap.querySelector('#btn-start-gauntlet-main').onclick = () => goToScreen('gauntlet');
   wrap.querySelector('#btn-start-roulette-main').onclick = () => goToScreen('wheel');
+
+  if (isLocked) {
+    const lockedBtn = wrap.querySelector('#btn-start-gauntlet-locked');
+    if (lockedBtn) {
+      lockedBtn.onclick = () => {
+        showToast('Tame your first beast in the Roulette to unlock the Gauntlet!');
+        goToScreen('wheel');
+      };
+    }
+  } else {
+    const gauntletBtn = wrap.querySelector('#btn-start-gauntlet-main');
+    if (gauntletBtn) gauntletBtn.onclick = () => goToScreen('gauntlet');
+
+    const heroImg = wrap.querySelector('#title-hero-comp-img');
+    if (heroImg && companion) {
+      heroImg.onerror = () => handleArtError(heroImg, companion);
+    }
+
+    const frame = wrap.querySelector('#title-comp-frame');
+    if (frame && companion) {
+      frame.onclick = () => {
+        openCardModal(companion, {
+          isCaught: true,
+          isCompanion: true,
+          isOwnedOnchain: ownedOnchainSet.has(String(companion.id)),
+          onSelectCompanion: (selected) => {
+            albumData.activeCompanionId = String(selected.id);
+            saveAlbum(albumData);
+            render();
+          },
+        });
+      };
+    }
+  }
 
   return wrap;
 }
 
+// ----------------- FIRST COMPANION REVEAL MODAL -----------------
+
+function openFirstCompanionModal(beast) {
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay first-companion-modal';
+  const art = artForBeast(beast.id) || beast.art || `/beasts/art/${beast.id}.svg`;
+  const tierCol = TIER_COLORS[beast.rarity || beast.tier || 5] || 'var(--gold)';
+
+  modal.innerHTML = `
+    <div class="first-comp-dialog arcade-card card-flip" style="border:2px solid var(--gold); background:#120e22; padding:22px 18px; text-align:center; max-width:390px; width:92%; border-radius:12px;">
+      <div class="pixel-tag" style="background:#281b38; color:var(--gold); border:1px solid var(--gold); margin-bottom:8px;">
+        ★ YOUR FIRST COMPANION! ★
+      </div>
+      <div class="first-comp-art-frame" style="width:130px; height:130px; margin:0 auto; border:2px solid ${tierCol}; border-radius:12px; overflow:hidden; background:#0c0a18; box-shadow:0 0 25px ${tierCol}44; display:flex; align-items:center; justify-content:center;">
+        <img src="${art}" alt="${beast.name}" style="width:100%; height:100%; object-fit:contain;" class="bounce-idle" />
+      </div>
+      <h2 class="arcade-title" style="color:var(--gold); font-size:1.35rem; margin:10px 0 2px;">
+        ${beast.name}
+      </h2>
+      <div style="font-size:0.85rem; color:${tierCol}; font-weight:bold; margin-bottom:8px;">
+        T${beast.rarity || beast.tier} · ${beast.type || 'Hunter'} Beast
+      </div>
+      <p style="font-size:0.82rem; color:var(--text); line-height:1.4; margin-bottom:16px;">
+        ${beast.name} is now your active ally! The <strong>Dungeon Gauntlet</strong> and <strong>Dojo</strong> are now UNLOCKED!
+      </p>
+
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <button id="btn-first-comp-gauntlet" class="btn-primary arcade-primary-btn" style="height:52px; font-size:1.05rem; width:100%;">
+          ENTER THE GAUNTLET
+        </button>
+        <button id="btn-first-comp-spin" class="btn-ghost arcade-btn" style="height:44px; border:1px solid var(--gold); color:var(--gold); width:100%;">
+          SPIN AGAIN
+        </button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  const compImg = modal.querySelector('.first-comp-art-frame img');
+  if (compImg) {
+    compImg.onerror = () => handleArtError(compImg, beast);
+  }
+
+  modal.querySelector('#btn-first-comp-gauntlet').onclick = () => {
+    modal.remove();
+    goToScreen('gauntlet');
+  };
+
+  modal.querySelector('#btn-first-comp-spin').onclick = () => {
+    modal.remove();
+    goToScreen('wheel');
+  };
+}
+
+// ----------------- ODDS & PITY BOTTOM SHEET -----------------
+
 function openOddsModal() {
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
+  const pity = getPityStatus(state);
+
   modal.innerHTML = `
     <div class="odds-dialog arcade-panel" style="max-width:440px; width:92%; background:#10101c; border:2px solid var(--gold); border-radius:10px; padding:18px; color:var(--text);">
       <div style="display:flex; justify-content:space-between; align-items:center;">
-        <h3 class="arcade-title" style="font-size:1.1rem;">📊 GACHA ODDS & PITY RULES</h3>
+        <h3 class="arcade-title" style="font-size:1.1rem; color:var(--gold);">GACHA ODDS & PITY RULES</h3>
         <button id="btn-close-odds" class="btn-ghost arcade-btn" style="min-height:28px; padding:2px 8px;">✕</button>
       </div>
 
       <p style="font-size:0.75rem; color:var(--muted); margin:6px 0 12px;">
-        Conforms to GACHA_SYSTEM_SPEC.md (Starr Road deterministic spine + pity).
+        Single source of truth per GACHA_CONFIG.pity & Starr Road deterministic spine.
       </p>
 
       <div class="odds-table" style="display:flex; flex-direction:column; gap:6px; background:#0a0a12; padding:10px; border-radius:8px; border:1px solid var(--line);">
@@ -648,11 +657,10 @@ function openOddsModal() {
       </div>
 
       <div style="margin-top:12px; background:#0e0e18; padding:10px; border-radius:8px; font-size:0.75rem; border:1px solid var(--line);">
-        <div style="color:var(--gold); font-weight:bold; margin-bottom:4px;">★ BAD LUCK PROTECTION & PROGRESSION:</div>
-        <div>• <strong>Rare (T3) or better:</strong> Guaranteed on 15th spin without one.</div>
-        <div>• <strong>Legendary (T1):</strong> Guaranteed on 45th spin without one.</div>
-        <div>• <strong>Unowned Beast Preference:</strong> Unowned beasts have 3x higher weight.</div>
-        <div>• <strong>Starr Road:</strong> Duplicates give credits to unlock guaranteed beast rarities!</div>
+        <div style="color:var(--gold); font-weight:bold; margin-bottom:4px;">★ BAD LUCK PROTECTION & PITY:</div>
+        <div>• <strong>Rare (T3) or better:</strong> Guaranteed on 15th spin without one (${pity.tier3In} spins left).</div>
+        <div>• <strong>Legendary (T1):</strong> Guaranteed on 45th spin without one (${pity.tier1In} spins left).</div>
+        <div>• <strong>Starr Road:</strong> Duplicates award credits to unlock guaranteed beast tiers!</div>
       </div>
     </div>
   `;
@@ -661,96 +669,124 @@ function openOddsModal() {
   document.body.appendChild(modal);
 }
 
-// ----------------- 2. WHEEL SCREEN -----------------
+// ----------------- 2. ROULETTE SCREEN (SLIM HUD & HERO REEL) -----------------
 
 function createWheelScreen() {
   const wrap = document.createElement('div');
-  wrap.className = 'screen';
+  wrap.className = 'screen wheel-screen-container';
 
   const pity = getPityStatus(state);
   const targetTierColor = TIER_COLORS[pity.targetTier] || '#fff';
-
-  const gachaPanelHtml = `
-    <div class="gacha-status-card arcade-panel">
-      <!-- Pity Counters Row -->
-      <div class="gacha-pity-row">
-        <div class="pity-chip ${pity.tier3In === 1 ? 'flash' : ''}">
-          <span class="pity-chip-label">✨ RARE+ (T3) PITY:</span>
-          <span class="pity-chip-val num font-bold">${pity.tier3In === 1 ? 'GUARANTEED NEXT!' : `${pity.tier3In} spins`}</span>
-        </div>
-        <div class="pity-chip ${pity.tier1In === 1 ? 'flash' : ''}">
-          <span class="pity-chip-label">👑 LEGEND PITY:</span>
-          <span class="pity-chip-val num font-bold">${pity.tier1In === 1 ? 'GUARANTEED NEXT!' : `${pity.tier1In} spins`}</span>
-        </div>
-        <button id="btn-show-odds" class="btn-ghost arcade-btn" style="min-height:28px; padding:2px 8px; font-size:0.75rem;">
-          📊 Odds
-        </button>
-      </div>
-
-      <!-- Starr Road / Credit Track (Deterministic Progression Spine) -->
-      <div class="credit-track-bar">
-        <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.76rem;">
-          <span><strong>STARR TRACK:</strong> Next ➔ <strong style="color:${targetTierColor}">T${pity.targetTier} ${pity.targetTierName}</strong></span>
-          <span class="num font-bold" style="color:var(--gold);">🪙 ${pity.credits} / ${pity.targetCost} Credits</span>
-        </div>
-        <div class="meter-track" style="height:7px; margin-top:4px;">
-          <div class="meter-fill" style="width:${pity.creditProgressPct}%; background:linear-gradient(90deg, #3d8bff, var(--gold));"></div>
-        </div>
-        ${
-          pity.canClaim
-            ? `<button id="btn-claim-track" class="btn-primary arcade-btn" style="width:100%; min-height:36px; margin-top:8px; font-size:0.85rem; background:linear-gradient(135deg, #3ecf6e, #2ea354);">
-                ★ CLAIM T${pity.targetTier} ${pity.targetTierName.toUpperCase()} BEAST NOW! ★
-              </button>`
-            : ''
-        }
-      </div>
-    </div>
-  `;
-
-  const previewStrip = buildReelStrip(beasts[0] || { id: '1', name: 'Beast', rarity: 5 }, beasts, state.rng, 8, 4);
+  const remainingSpins = Math.max(0, state.spinsMax - state.spinsUsed);
+  const isLucky = state.essence >= 10 || state.luckyActive;
 
   wrap.innerHTML = `
-    ${gachaPanelHtml}
-
-    <div id="reel-mount" class="reel-mount" style="width:100%;">
-      <div class="reel-viewport">
-        <div class="reel-fade-left"></div>
-        <div class="reel-pointer-line"></div>
-        <div class="reel-strip" id="reel-strip-preview">
-          ${previewStrip
-            .map((b) => {
-              const tierColor = TIER_COLORS[b.rarity] || '#f2f2f2';
-              const sigilSvg = generateSigilSvg(b.id, b.name, b.rarity);
-              return `
-                <div class="reel-card tier-${b.rarity}" style="width:110px; border-color:${tierColor};">
-                  <div class="reel-card-art">${sigilSvg}</div>
-                  <div class="reel-card-name" style="color:${tierColor}">${b.name.slice(0, 11)}</div>
-                  <div class="reel-card-meta">T${b.rarity}</div>
-                </div>
-              `;
-            })
-            .join('')}
-        </div>
-        <div class="reel-fade-right"></div>
+    <!-- Slim Top HUD (Single Row) -->
+    <div class="wheel-slim-hud">
+      <div class="wheel-hud-chip">
+        <span class="hud-chip-label">SPINS</span>
+        <span class="hud-chip-val num font-bold" style="color:var(--gold);">${remainingSpins} LEFT</span>
       </div>
+      <div class="wheel-hud-chip">
+        <span class="hud-chip-label">ESSENCE</span>
+        <span class="hud-chip-val num" style="color:${isLucky ? '#ffd15c' : 'var(--text)'};">
+          ${state.essence}/10 ${isLucky ? '★ LUCKY!' : ''}
+        </span>
+      </div>
+      <div class="wheel-hud-chip">
+        <span class="hud-chip-label">CREDITS</span>
+        <span class="hud-chip-val num" style="color:var(--good);">${state.credits || 0} CR</span>
+      </div>
+      <button id="btn-show-odds" class="btn-ghost arcade-btn wheel-odds-btn" title="View Gacha Odds & Pity Rules">
+        ODDS & PITY
+      </button>
     </div>
 
-    <div class="wheel-controls">
-      <button id="btn-spin" class="btn-primary" style="width:100%; height:52px; font-size:1.15rem;">
-        SPIN REEL (Space)
+    <!-- Center Hero Reel -->
+    <div id="reel-mount" class="reel-mount hero-reel-mount ${isLucky ? 'lucky-reel-aura' : ''}" style="width:100%;"></div>
+
+    <!-- Thin Starr Road Progress Track Under Reel -->
+    <div class="starr-road-thin-strip" id="starr-road-strip">
+      <div class="starr-strip-labels">
+        <span><strong>STARR ROAD:</strong> Next ➔ <strong style="color:${targetTierColor}">T${pity.targetTier} ${pity.targetTierName}</strong></span>
+        <span class="num font-bold" style="color:var(--gold);">${pity.credits} / ${pity.targetCost} CR</span>
+      </div>
+      <div class="meter-track" style="height:5px; margin-top:3px;">
+        <div class="meter-fill" style="width:${pity.creditProgressPct}%; background:linear-gradient(90deg, #3d8bff, var(--gold));"></div>
+      </div>
+      ${pity.canClaim ? `
+        <button id="btn-claim-track" class="btn-primary arcade-btn" style="width:100%; min-height:36px; margin-top:6px; font-size:0.85rem; background:linear-gradient(135deg, #3ecf6e, #2ea354);">
+          ★ CLAIM T${pity.targetTier} ${pity.targetTierName.toUpperCase()} BEAST NOW! ★
+        </button>
+      ` : ''}
+    </div>
+
+    <!-- Lower Half Thumb Zone Controls -->
+    <div class="wheel-controls-thumb-zone">
+      ${albumData && albumData.caughtIds && albumData.caughtIds.length > 0 ? `
+        <div class="wheel-recent-pulls-row">
+          <span class="recent-label">RECENT:</span>
+          ${albumData.caughtIds.slice(-4).reverse().map((id) => {
+            const b = beasts.find((x) => String(x.id) === String(id));
+            if (!b) return '';
+            const tCol = TIER_COLORS[b.rarity || b.tier || 5] || '#888';
+            return `<span class="recent-pull-chip" style="border-color:${tCol}; color:${tCol};">T${b.rarity || b.tier} ${b.name.slice(0, 9)}</span>`;
+          }).join('')}
+        </div>
+      ` : ''}
+
+      <div class="wheel-guaranteed-note">
+        ${isLucky ? '★ LUCKY SPIN ACTIVE: 1.6x Expanded Minigame Sweet Spot!' : `Next Rare+ guaranteed in <strong style="color:var(--gold);">${pity.tier3In}</strong> spins`}
+      </div>
+
+      <button id="btn-spin" class="btn-primary spin-hero-btn ${isLucky ? 'lucky-spin-btn' : ''}" style="width:100%; height:54px; font-size:1.15rem;" ${remainingSpins <= 0 ? 'disabled' : ''}>
+        ${remainingSpins <= 0 ? '0 SPINS LEFT · Earn more in Gauntlet' : isLucky ? `★ LUCKY SPIN · ${remainingSpins} LEFT` : `SPIN · ${remainingSpins} LEFT`}
       </button>
 
-      <label class="demo-toggle-wrap">
-        <input type="checkbox" id="chk-auto-spin" ${autoSpinEnabled ? 'checked' : ''} />
-        Auto-Spin (stage demo)
-      </label>
+      <div class="wheel-quick-spin-row">
+        <label class="demo-toggle-wrap">
+          <input type="checkbox" id="chk-quick-spin" ${quickSpinEnabled ? 'checked' : ''} />
+          Quick Spin (Fast Easing)
+        </label>
+      </div>
     </div>
   `;
 
-  const showOddsBtn = wrap.querySelector('#btn-show-odds');
-  if (showOddsBtn) {
-    showOddsBtn.onclick = openOddsModal;
-  }
+  // Render initial preview reel
+  const reelMount = wrap.querySelector('#reel-mount');
+  const previewStrip = buildReelStrip(beasts[0] || { id: '1', name: 'Beast', rarity: 5 }, beasts, state.rng, 8, 4);
+  reelMount.innerHTML = `
+    <div class="reel-viewport">
+      <div class="reel-fade-left"></div>
+      <div class="reel-pointer-notch" aria-hidden="true">
+        <svg viewBox="0 0 24 16" width="24" height="16" fill="var(--gold)"><polygon points="0,0 24,0 12,16"/></svg>
+      </div>
+      <div class="reel-strip" id="reel-strip-preview">
+        ${previewStrip.map((b) => {
+          const tierColor = TIER_COLORS[b.rarity] || '#f2f2f2';
+          const art = artForBeast(b.id) || b.art || `/beasts/art/${b.id}.svg`;
+          return `
+            <div class="reel-card tier-${b.rarity}" style="width:110px; border-color:${tierColor};">
+              <div class="reel-card-art">
+                <img src="${art}" class="reel-beast-thumb" alt="${b.name}" loading="lazy" />
+              </div>
+              <div class="reel-card-name" style="color:${tierColor}">${b.name.slice(0, 11)}</div>
+              <div class="reel-card-meta">T${b.rarity}</div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+      <div class="reel-fade-right"></div>
+    </div>
+  `;
+
+  wrap.querySelector('#btn-show-odds').onclick = openOddsModal;
+
+  const previewImgs = wrap.querySelectorAll('#reel-strip-preview img');
+  previewImgs.forEach((img, idx) => {
+    const b = previewStrip[idx];
+    if (b) img.onerror = () => handleArtError(img, b);
+  });
 
   const claimBtn = wrap.querySelector('#btn-claim-track');
   if (claimBtn) {
@@ -774,17 +810,12 @@ function createWheelScreen() {
     };
   }
 
-  const reelMount = wrap.querySelector('#reel-mount');
-  const spinBtn = wrap.querySelector('#btn-spin');
-  const autoChk = wrap.querySelector('#chk-auto-spin');
-
-  autoChk.onchange = (e) => {
-    autoSpinEnabled = e.target.checked;
-    if (autoSpinEnabled && !spinBtn.disabled) {
-      spinBtn.click();
-    }
+  const quickChk = wrap.querySelector('#chk-quick-spin');
+  quickChk.onchange = (e) => {
+    quickSpinEnabled = e.target.checked;
   };
 
+  const spinBtn = wrap.querySelector('#btn-spin');
   spinBtn.onclick = async () => {
     if (spinBtn.disabled) return;
     if (state.spinsUsed >= state.spinsMax) {
@@ -793,25 +824,38 @@ function createWheelScreen() {
     }
 
     spinBtn.disabled = true;
-    autoChk.disabled = true;
 
-    // Fetch verified block seed or local RNG fallback
+    // Verifiable block seed or local fallback
     const spinIndex = state.spinsUsed;
     currentSpinSeedInfo = await getSpinSeed({ runNonce, spinIndex });
     triggerBlockRefresh();
 
-    // Decide spin outcome with seeded RNG
-    currentSpinResult = spin(state);
-    if (!currentSpinResult) {
-      goToScreen('end');
-      return;
+    // Check first-spin tutorial assist
+    if (isFirstSpin(albumData)) {
+      const starterBeast = getFirstSpinBeast(beasts, state.rng);
+      currentSpinResult = {
+        beast: starterBeast,
+        targetAngle: 0,
+        slice: null,
+        luckyActive: false,
+        pityTriggered: false,
+        spinSeedInfo: currentSpinSeedInfo,
+      };
+      state.spinsUsed++;
+    } else {
+      currentSpinResult = spin(state);
+      if (!currentSpinResult) {
+        goToScreen('end');
+        return;
+      }
+      currentSpinResult.spinSeedInfo = currentSpinSeedInfo;
     }
-    currentSpinResult.spinSeedInfo = currentSpinSeedInfo;
 
     activeReelHandle = createReel(reelMount, {
       winner: currentSpinResult.beast,
       pool: beasts,
       rng: state.rng,
+      quickSpin: quickSpinEnabled,
       onComplete: () => {
         activeReelHandle = null;
         goToScreen('tame');
@@ -822,15 +866,11 @@ function createWheelScreen() {
   return wrap;
 }
 
-function renderWheelScreenCanvas() {
-  // Wheel replaced by responsive card reel
-}
-
-// ----------------- 3. TAME SCREEN -----------------
+// ----------------- 3. FULL-SCREEN TAME MINIGAME SCREEN -----------------
 
 function createTameScreen() {
   const wrap = document.createElement('div');
-  wrap.className = 'screen';
+  wrap.className = 'screen tame-fullscreen-container';
 
   if (!currentSpinResult) {
     goToScreen('wheel');
@@ -839,184 +879,87 @@ function createTameScreen() {
 
   const { beast, luckyActive } = currentSpinResult;
   const tier = beast.rarity || beast.tier || 5;
-  const tierColor = TIER_COLORS[tier] || '#f2f2f2';
-  const tierName = TIER_NAMES[tier] || 'Common';
-  const isOwnedOnchain = ownedOnchainSet.has(String(beast.id));
+  const isTutorial = isFirstSpin(albumData);
+  const bIdStr = String(beast.id);
+  const isNew = !albumData.caughtIds.includes(bIdStr);
+  const rolledFriendliness = isNew
+    ? (Math.floor(Math.random() * 20) + 1)
+    : (albumData.friendliness?.[bIdStr] || 10);
 
-  const seedInfo = currentSpinResult.spinSeedInfo || currentSpinSeedInfo;
-  const isVerified = seedInfo && seedInfo.source === 'verified';
-  const spinChipHtml = isVerified
-    ? `<button id="btn-verified-spin" class="verified-chip" title="Click to view replay data">🔒 Verified #${seedInfo.blockNumber || 'Sepolia'} · ${seedInfo.blockHash ? seedInfo.blockHash.slice(0, 8) + '…' : ''} ↗</button>`
-    : `<span class="local-rng-chip">Local RNG</span>`;
-
-  // Pick minigame (respecting debug parameter if set)
-  const urlParams = new URLSearchParams(window.location.search);
-  const debugGameId = urlParams.get('game');
-  const game = (debugGameId && getGameById(debugGameId)) || pickGame(MINIGAMES, beast, state.rng, gameHistory);
-  currentActiveGame = game;
-  gameHistory.push(game.id);
-
-  wrap.innerHTML = `
-    <div class="tame-card card-flip">
-      <div class="tame-header">
-        <span class="badge-tag" style="background:${tierColor}22; color:${tierColor}; border:1px solid ${tierColor}66;">
-          T${tier} ${tierName.toUpperCase()}
-        </span>
-        ${beast.isOnchain ? '<span class="onchain-pill-badge">ONCHAIN</span>' : '<span class="sigil-pill-badge">SIGIL</span>'}
-        ${isOwnedOnchain ? '<span class="owned-pill-badge">OWNED</span>' : ''}
-        ${spinChipHtml}
-        ${luckyActive ? '<span class="badge-tag" style="background:#f5c542; color:#000; font-weight:bold;">★ LUCKY SPIN ACTIVE (1.6x)</span>' : ''}
-      </div>
-
-      <div class="beast-portrait-wrap ${isOwnedOnchain ? 'owned-glow' : ''}" id="beast-card-slot" style="border-color:${isOwnedOnchain ? 'var(--gold)' : tierColor}; box-shadow: 0 0 24px ${isOwnedOnchain ? 'rgba(245, 197, 66, 0.45)' : `${tierColor}44`};">
-        <img id="tame-beast-img" class="beast-portrait" src="${beast.art || artForBeast(beast.id) || `/beasts/art/${beast.id}.svg`}" alt="${beast.name}" />
-      </div>
-
-      <h2 class="tame-beast-title" style="margin-bottom:2px;">${beast.name}</h2>
-      <div style="font-size:0.85rem; color:var(--muted); margin-bottom:12px;">${beast.type || 'Wild'} · #${beast.id}</div>
-
-      <div id="minigame-mount" class="minigame-mount" style="width:100%; min-height:260px; display:flex; align-items:center; justify-content:center;"></div>
-
-      <div id="minigame-action-bar" style="width:100%; margin-top:10px; display:flex; justify-content:center;">
-        <button id="btn-tame-action" class="btn-primary" style="width:100%; height:48px; font-size:1.05rem; letter-spacing:0.02em;">
-          ${(game.controls || '').toUpperCase().includes('DODGE') ? 'DODGE & STRIKE <span class="kbd-hint">(Space)</span>' : (game.controls || '').toUpperCase().includes('TUG') || (game.controls || '').toUpperCase().includes('MASH') ? 'TUG / PULL <span class="kbd-hint">(Space)</span>' : 'TAME / STRIKE <span class="kbd-hint">(Space)</span>'}
-        </button>
-      </div>
-
-      <div id="tame-result-panel" class="tame-result-panel" style="display:none;" aria-live="polite"></div>
-    </div>
-  `;
-
-  const tameImg = wrap.querySelector('#tame-beast-img');
-  if (tameImg) {
-    tameImg.onerror = () => handleArtError(tameImg, beast);
-  }
-
-  const verifiedBtn = wrap.querySelector('#btn-verified-spin');
-  if (verifiedBtn) {
-    verifiedBtn.onclick = () => openReplayModal(seedInfo, beast);
-  }
-
-  const mount = wrap.querySelector('#minigame-mount');
-  const actionBar = wrap.querySelector('#minigame-action-bar');
-  const tameActionBtn = wrap.querySelector('#btn-tame-action');
-  const resultPanel = wrap.querySelector('#tame-result-panel');
-
-  if (tameActionBtn) {
-    tameActionBtn.onclick = () => {
-      const canvas = mount.querySelector('canvas');
-      if (canvas) {
-        const rect = canvas.getBoundingClientRect();
-        canvas.dispatchEvent(new PointerEvent('pointerdown', { clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2, bubbles: true }));
-      }
-      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', key: ' ', bubbles: true }));
-    };
-  }
-
-  // Input lock while minigame runs
-  window.__tameInputLocked = true;
-
-  // Execute minigame with shared flow
-  setTimeout(() => {
-    executeMiniGameWithFlow(
-      game,
-      {
-        mount,
-        beast: { ...beast, tier },
-        rng: state.rng,
-        settings: {
-          difficulty: currentDifficulty,
-          latencyMs: currentLatencyMs,
-        },
-        sfx,
-        autoSpinEnabled,
-      },
-      (res) => {
-        window.__tameInputLocked = false;
-        onMinigameResolved(res.success, res.grade);
-      }
-    );
-  }, 40);
-
-  function onMinigameResolved(hit, grade = 'hit') {
-    mount.style.display = 'none';
-    if (actionBar) actionBar.style.display = 'none';
-    resultPanel.style.display = 'flex';
-
-    // Record into verifiable run log
-    runLogs.push({
-      spinIndex: state.spinsUsed,
-      beastId: String(beast.id),
-      name: beast.name,
-      result: hit ? 'tamed' : 'escaped',
-      blockHash: seedInfo?.blockHash || null,
-      blockNumber: seedInfo?.blockNumber || null,
-      seed: seedInfo?.seed || null,
-    });
-
-    if (hit) {
-      playCatchSound(beast.rarity);
-      const isNew = !state.owned.has(beast.id);
-      const res = catchBeast(state, beast);
-
-      if (isNew) {
-        albumData.caughtIds.push(beast.id);
-        albumData.caughtAt[beast.id] = Date.now();
-        saveAlbum(albumData);
-        showToast(`🎉 New Beast added to Album: ${beast.name}!`);
-      } else {
-        showToast(`✨ Duplicate: +${res.creditsGained || 10} Credits & +${res.essenceGained} Essence!`);
-      }
-
-      resultPanel.innerHTML = `
-        <div class="result-badge success" style="color:${tierColor}; font-size:2.2rem; font-weight:800; letter-spacing:0.04em; margin-bottom:2px;">TAMED!</div>
-        <div class="result-subtitle" style="font-size:0.95rem; color:var(--muted); margin:4px 0 10px 0;">
-          ${isNew ? `New Beast recorded in your Album!` : `Duplicate converted: +${res.creditsGained || 10} Credits · +${res.essenceGained} Essence`}
-        </div>
-        <div style="display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-bottom:12px;">
-          <a href="https://beasts.app/#/beast/${beast.id}" target="_blank" rel="noopener" class="beasts-app-link">View on beasts.app ↗</a>
-          <a href="https://sepolia.starkscan.co/nft/${SEPOLIA.nft}/${beast.tokenId || beast.id}" target="_blank" rel="noopener" class="beasts-app-link" style="color:var(--gold);">Starkscan NFT ↗</a>
-        </div>
-        <button id="btn-continue" class="btn-primary" style="width:100%; height:48px;">
-          Continue (Space)
-        </button>
-      `;
-    } else {
-      playMissSound();
-      missBeast(state);
-      wrap.querySelector('.tame-card').classList.add('shake-miss');
-
-      resultPanel.innerHTML = `
-        <div class="result-badge fail" style="color:var(--bad); font-size:2.2rem; font-weight:800; letter-spacing:0.04em; margin-bottom:2px;">ESCAPED</div>
-        <div class="result-subtitle" style="font-size:0.95rem; color:var(--muted); margin:4px 0 10px 0;">
-          The beast broke free into the mist!
-        </div>
-        <div style="display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-bottom:12px;">
-          <a href="https://beasts.app/#/beast/${beast.id}" target="_blank" rel="noopener" class="beasts-app-link">View on beasts.app ↗</a>
-        </div>
-        <button id="btn-continue" class="btn-primary" style="width:100%; height:48px;">
-          Continue (Space)
-        </button>
-      `;
-    }
-
-    const continueBtn = resultPanel.querySelector('#btn-continue');
-    continueBtn.onclick = () => {
-      if (state.spinsUsed >= state.spinsMax) {
-        goToScreen('end');
-      } else {
-        goToScreen('wheel');
-      }
-    };
-
-    if (autoSpinEnabled) {
-      setTimeout(() => {
-        if (continueBtn) continueBtn.click();
-      }, 900);
-    }
-  }
+  // Mount Full-Screen Minigame Framework
+  mountFullScreenMinigame(wrap, {
+    beast,
+    tier,
+    lucky: luckyActive,
+    isTutorial,
+    isNew,
+    friendliness: rolledFriendliness,
+    difficulty: currentDifficulty,
+    sfx: {
+      tick: playTick,
+      good: playGoodSound,
+      bad: playBadSound,
+      perfect: playPerfectSound,
+      catchSound: playCatchSound,
+      missSound: playMissSound,
+    },
+    onComplete: (res) => {
+      onMinigameResolved(res.success, res.grade, beast, rolledFriendliness);
+    },
+  });
 
   return wrap;
+}
+
+function onMinigameResolved(hit, grade = 'hit', beast, initialFriendliness = 10) {
+  const seedInfo = currentSpinResult?.spinSeedInfo || currentSpinSeedInfo;
+
+  runLogs.push({
+    spinIndex: state.spinsUsed,
+    beastId: String(beast.id),
+    name: beast.name,
+    result: hit ? 'tamed' : 'escaped',
+    blockHash: seedInfo?.blockHash || null,
+    blockNumber: seedInfo?.blockNumber || null,
+    seed: seedInfo?.seed || null,
+  });
+
+  if (hit) {
+    const isFirst = albumData.caughtIds.length === 0;
+    const bIdStr = String(beast.id);
+    const isNew = !albumData.caughtIds.includes(bIdStr);
+    const res = catchBeast(state, beast);
+
+    if (isFirst) {
+      unlockFirstCompanion(albumData, beast);
+      state.owned.add(bIdStr);
+      saveAlbum(albumData);
+      openFirstCompanionModal(beast);
+      return;
+    }
+
+    if (isNew) {
+      albumData.caughtIds.push(bIdStr);
+      albumData.caughtAt[bIdStr] = Date.now();
+      if (!albumData.friendliness) albumData.friendliness = {};
+      albumData.friendliness[bIdStr] = initialFriendliness || Math.floor(Math.random() * 20) + 1;
+      state.owned.add(bIdStr);
+      saveAlbum(albumData);
+      showToast(`★ New Beast tamed: ${beast.name}! Friendliness: ${albumData.friendliness[bIdStr]}%`);
+    } else {
+      // Duplicate does not affect friendliness stat
+      showToast(`★ Duplicate: +${res.creditsGained || 10} Credits & +${res.essenceGained} Essence! Friendliness preserved.`);
+    }
+  } else {
+    missBeast(state);
+    showToast('The beast escaped into the wild.');
+  }
+
+  if (state.spinsUsed >= state.spinsMax) {
+    goToScreen('end');
+  } else {
+    goToScreen('wheel');
+  }
 }
 
 // ----------------- MODALS (REPLAY & RECEIPT) -----------------
@@ -1038,7 +981,7 @@ function openReplayModal(seedInfo, beast) {
     <div class="replay-dialog">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
         <h3 style="font-family:var(--font-title); font-size:1.25rem; margin:0; color:var(--good);">
-          🔒 VERIFIABLE REPLAYABLE SPIN
+          VERIFIABLE REPLAYABLE SPIN
         </h3>
         <button class="modal-close-btn" id="replay-close">✕</button>
       </div>
@@ -1059,7 +1002,7 @@ function openReplayModal(seedInfo, beast) {
 
       <div style="display:flex; gap:8px; margin-top:16px;">
         <button id="btn-run-replay" class="btn-primary" style="flex:1; height:42px;">
-          🔄 Replay Spin
+          Replay Spin
         </button>
         ${seedInfo?.blockHash ? `<a href="${explorerUrl}" target="_blank" rel="noopener" class="btn-ghost" style="display:flex; align-items:center; justify-content:center; padding:0 12px; border:1px solid var(--line); font-size:0.8rem;">Explorer ↗</a>` : ''}
       </div>
@@ -1113,7 +1056,7 @@ function openReceiptModal(receiptData) {
     <div class="receipt-dialog">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
         <h3 style="font-family:var(--font-title); font-size:1.25rem; margin:0; color:var(--gold);">
-          📜 STARKNET RUN RECEIPT
+          STARKNET RUN RECEIPT
         </h3>
         <button class="modal-close-btn" id="receipt-close">✕</button>
       </div>
@@ -1135,16 +1078,16 @@ function openReceiptModal(receiptData) {
 
       <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; margin-bottom:8px;">
         <button id="btn-copy-receipt-json" class="btn-primary" style="height:42px; font-size:0.85rem;">
-          📋 Copy JSON
+          Copy JSON
         </button>
         <button id="btn-download-receipt-json" class="btn-primary" style="height:42px; background:var(--panel-2); border:1px solid var(--gold); color:var(--gold); font-size:0.85rem;">
-          💾 Download JSON
+          Download JSON
         </button>
       </div>
 
       <div style="text-align:center; margin-top:8px;">
         <button disabled class="btn-ghost" style="opacity:0.45; font-size:0.75rem; cursor:not-allowed;">
-          🪙 Mint Onchain NFT (Coming Soon)
+          Mint Onchain NFT (Coming Soon)
         </button>
         <div style="font-size:0.68rem; color:var(--muted); margin-top:2px;">
           Simulated run only — zero gas spent, no contract mint transaction.
@@ -1187,7 +1130,6 @@ function createAlbumScreen() {
   const ownedCount = ownedOnchainSet.size;
   const caughtPct = Math.round((caughtCount / (totalBeasts || 1)) * 100);
 
-  // Filter beasts by rarity or category
   const filtered = beasts.filter((b) => {
     if (albumFilter === 'all') return true;
     if (albumFilter === 'artathon') return Boolean(b.isArtathon || Number(b.id) >= 10000);
@@ -1195,7 +1137,7 @@ function createAlbumScreen() {
   });
 
   wrap.innerHTML = `
-    <!-- Sticky, Non-Overflowing Header -->
+    <!-- Sticky Header -->
     <div class="dex-sticky-header">
       <div class="dex-header-row">
         <div style="display:flex; align-items:center; gap:8px;">
@@ -1216,15 +1158,13 @@ function createAlbumScreen() {
         </div>
       </div>
 
-      <!-- Thin Progress Bar -->
       <div class="dex-progress-track">
         <div class="dex-progress-bar-fill" style="width:${caughtPct}%;"></div>
       </div>
 
-      <!-- Single Horizontal Scrolling Row of Filter Chips Starting with All -->
       <div class="dex-filter-scroll-row">
         <button class="filter-chip ${albumFilter === 'all' ? 'active' : ''}" data-filter="all">All (${totalBeasts})</button>
-        <button class="filter-chip ${albumFilter === 'artathon' ? 'active' : ''}" data-filter="artathon" style="color:#d8b4fe; border-color:var(--t2);">🎨 Artathon (30)</button>
+        <button class="filter-chip ${albumFilter === 'artathon' ? 'active' : ''}" data-filter="artathon" style="color:#d8b4fe; border-color:var(--t2);">Artathon (30)</button>
         <button class="filter-chip ${albumFilter === '1' ? 'active' : ''}" data-filter="1" style="color:var(--t1);">T1 Legend</button>
         <button class="filter-chip ${albumFilter === '2' ? 'active' : ''}" data-filter="2" style="color:var(--t2);">T2 Epic</button>
         <button class="filter-chip ${albumFilter === '3' ? 'active' : ''}" data-filter="3" style="color:var(--t3);">T3 Rare</button>
@@ -1233,12 +1173,11 @@ function createAlbumScreen() {
       </div>
     </div>
 
-    <!-- Beast Grid -->
     <div class="beast-grid" id="album-grid"></div>
 
     <div style="text-align:center; margin: 20px 0 32px;">
       <button id="btn-reset-album" class="btn-ghost" style="font-size:0.75rem; color:var(--muted); border:1px solid var(--line);">
-        🗑️ Clear Local Album Cache
+        Clear Local Album Cache & Re-lock Gate
       </button>
     </div>
   `;
@@ -1253,11 +1192,11 @@ function createAlbumScreen() {
   });
 
   wrap.querySelector('#btn-reset-album').onclick = () => {
-    if (confirm('Are you sure you want to reset your local collection album?')) {
+    if (confirm('Are you sure you want to reset your local collection? This will re-lock the Gauntlet until you tame a beast.')) {
       clearAlbum();
-      albumData = { caughtIds: [], caughtAt: {}, capturedNamed: [], activeCompanionId: null };
+      albumData = createFreshAlbumState();
       state.owned = new Set();
-      showToast('Local album cleared');
+      showToast('Local album cleared · Gauntlet locked');
       render();
     }
   };
@@ -1266,24 +1205,25 @@ function createAlbumScreen() {
   filtered.forEach((b) => {
     const bIdStr = String(b.id);
     const isCaught = albumData.caughtIds.some((id) => String(id) === bIdStr);
+    const isDiscovered = !isCaught && Boolean(albumData.discoveredIds && albumData.discoveredIds.some((id) => String(id) === bIdStr));
     const isOwnedOnchain = ownedOnchainSet.has(bIdStr);
     const namedVariant = (albumData.capturedNamed || []).find((c) => String(c.id) === bIdStr);
     const isCompanion = String(albumData.activeCompanionId) === bIdStr;
+    const friendliness = albumData.friendliness?.[bIdStr] !== undefined ? albumData.friendliness[bIdStr] : 10;
     const tier = b.tier || b.rarity || 5;
     const tierColor = TIER_COLORS[tier] || '#f2f2f2';
     const tierName = TIER_NAMES[tier] || 'Common';
     const combatType = b.type || (tier % 3 === 0 ? 'Brute' : tier % 3 === 1 ? 'Magical' : 'Hunter');
-    const typeIcons = { Magical: '🪄', Hunter: '🏹', Brute: '🔨' };
+    const typeIcons = { Magical: 'MAG', Hunter: 'HNT', Brute: 'BRT' };
 
     const card = document.createElement('div');
-    card.className = `album-card ${isCaught ? 'caught' : 'uncaught'} ${isOwnedOnchain ? 'owned-card' : ''} ${namedVariant ? 'named-card' : ''} ${isCompanion ? 'companion-card' : ''}`;
+    card.className = `album-card ${isCaught ? 'caught' : isDiscovered ? 'discovered-card' : 'uncaught'} ${isOwnedOnchain ? 'owned-card' : ''} ${namedVariant ? 'named-card' : ''} ${isCompanion ? 'companion-card' : ''}`;
 
     if (isCaught || isOwnedOnchain) {
       card.style.borderColor = isOwnedOnchain ? 'var(--gold)' : namedVariant ? 'var(--gold)' : `${tierColor}66`;
       card.style.boxShadow = isOwnedOnchain ? '0 0 18px rgba(245, 197, 66, 0.45)' : namedVariant ? '0 0 14px rgba(245, 197, 66, 0.4)' : `0 4px 12px ${tierColor}18`;
 
       const cardName = namedVariant ? `${namedVariant.prefix} ${b.name}` : b.name;
-
       const artSrc = b.art || artForBeast(b.id) || `/beasts/art/${b.id}.svg`;
 
       card.innerHTML = `
@@ -1295,6 +1235,7 @@ function createAlbumScreen() {
         <div class="album-card-meta">
           <span style="color:${tierColor}; font-weight:bold;">T${b.rarity}</span>
           <span>${typeIcons[combatType] || ''} ${tierName}</span>
+          <span class="friendliness-stat-badge">♥ ${friendliness}%</span>
         </div>
         <div class="card-badge-container">
           ${(b.isArtathon || Number(b.id) >= 10000) ? '<span class="artathon-pill-badge" style="font-size:0.58rem; padding:1px 4px;">ARTATHON</span>' : ''}
@@ -1303,8 +1244,25 @@ function createAlbumScreen() {
           ${namedVariant ? '<span style="font-size:0.58rem; color:var(--gold); font-weight:bold;">NAMED</span>' : ''}
         </div>
       `;
+    } else if (isDiscovered) {
+      const artSrc = b.art || artForBeast(b.id) || `/beasts/art/${b.id}.svg`;
+      card.style.borderColor = 'rgba(100, 150, 255, 0.45)';
+      card.style.boxShadow = '0 2px 10px rgba(100, 150, 255, 0.15)';
+
+      card.innerHTML = `
+        <div class="album-card-art-wrap discovered-frame" style="border:1px solid rgba(100,150,255,0.4); border-radius:8px; overflow:hidden;">
+          <img class="album-card-art" src="${artSrc}" alt="${b.name}" />
+        </div>
+        <div class="album-card-title" style="color:#c0d2f8;">${b.name}</div>
+        <div class="album-card-meta">
+          <span style="color:${tierColor}; font-weight:bold;">T${b.rarity}</span>
+          <span>${typeIcons[combatType] || ''} ${tierName}</span>
+        </div>
+        <div class="card-badge-container">
+          <span class="discovered-pill-badge">DISCOVERED (Untamed)</span>
+        </div>
+      `;
     } else {
-      // Locked card: Dark silhouette of real art + big "?" overlay with NO spoilers (no tier, type, or onchain badges)
       const artSrc = b.art || artForBeast(b.id) || `/beasts/art/${b.id}.svg`;
       card.innerHTML = `
         <div class="album-card-art-wrap locked-frame">
@@ -1325,14 +1283,16 @@ function createAlbumScreen() {
     const img = card.querySelector('img');
     if (img) img.onerror = () => handleArtError(img, b);
 
-    // Clicking card opens 3D Holographic Tilt Modal
     card.style.cursor = 'pointer';
     card.onclick = () => {
       openCardModal(b, {
         isCaught,
+        isDiscovered,
         isCompanion,
         isOwnedOnchain,
+        friendliness,
         onSelectCompanion: (selected) => {
+          if (!isCaught) return;
           albumData.activeCompanionId = selected.id;
           saveAlbum(albumData);
           showToast(`★ Set ${selected.name} as active Companion!`);
@@ -1369,18 +1329,18 @@ function createEndScreen() {
     ? `${rarestBeast.name} (T${rarestBeast.rarity} ${TIER_NAMES[rarestBeast.rarity]})`
     : 'None';
 
-  const shareText = `🎰 Beast Gauntlet & Roulette Summary
-🏆 Beasts Owned: ${caughtInRun}/${beasts.length}
-👑 Rarest Tamed: ${rarestDesc}
-❤️ Hearts Left: ${state.hearts}/3
-🎯 Spins Used: ${spinsUsed}/${state.spinsMax}
-✨ Essence Gathered: ${state.essence}
+  const shareText = `Beast Gauntlet & Roulette Summary
+Beasts Owned: ${caughtInRun}/${beasts.length}
+Rarest Tamed: ${rarestDesc}
+Hearts Left: ${state.hearts}/3
+Spins Used: ${spinsUsed}/${state.spinsMax}
+Essence Gathered: ${state.essence}
 Local collection (not minted) · beasts.app`;
 
   wrap.innerHTML = `
     <div class="end-card">
       <h1>${state.hearts <= 0 ? 'HUNT ENDED' : 'MAX SPINS REACHED'}</h1>
-      <p class="subhead">${state.hearts <= 0 ? 'You ran out of hearts in the wild.' : 'You completed your 25 spins!'}</p>
+      <p class="subhead">${state.hearts <= 0 ? 'You ran out of hearts in the wild.' : 'You completed your spins!'}</p>
 
       <div class="summary-tiles">
         <div class="summary-tile">
@@ -1403,16 +1363,16 @@ Local collection (not minted) · beasts.app`;
 
       <div class="end-actions">
         <button id="btn-sign-receipt" class="btn-primary" style="height:48px; background:linear-gradient(135deg, #1f4037, #99f2c8); color:#000; font-weight:800;">
-          ✍️ Sign Run Receipt (Gas-free)
+          Sign Run Receipt (Gas-free)
         </button>
         <button id="btn-copy-share" class="btn-primary" style="height:48px;">
-          📋 Copy Result
+          Copy Result
         </button>
         <button id="btn-play-again" class="btn-primary" style="height:48px; background:var(--panel-2); border:1px solid var(--gold); color:var(--gold);">
-          🔄 Play Again (Space)
+          Play Again
         </button>
         <button id="btn-view-album" class="btn-ghost">
-          📖 View Beast Dex
+          View Beast Dex
         </button>
       </div>
     </div>
@@ -1437,7 +1397,7 @@ Local collection (not minted) · beasts.app`;
         showToast('Receipt error: ' + err.message);
       } finally {
         signReceiptBtn.disabled = false;
-        signReceiptBtn.textContent = '✍️ Sign Run Receipt (Gas-free)';
+        signReceiptBtn.textContent = 'Sign Run Receipt (Gas-free)';
       }
     };
   }
@@ -1445,7 +1405,7 @@ Local collection (not minted) · beasts.app`;
   wrap.querySelector('#btn-copy-share').onclick = async () => {
     try {
       await navigator.clipboard.writeText(shareText);
-      showToast('Copied result to clipboard! 📋');
+      showToast('Copied result to clipboard!');
     } catch {
       showToast('Result copied! (Fallback)');
     }

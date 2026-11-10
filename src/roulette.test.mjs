@@ -70,35 +70,35 @@ test('weights: buildWheel assigns correct weights and angles', () => {
   assert.strictEqual(slices[1].isOwned, true);
 });
 
-test('pity: guarantees rarity <= 2 every 6 spins without one', () => {
+test('pity: guarantees rarity <= 3 per GACHA_CONFIG.pity at 15 spins without one', () => {
   const beasts = [
     { id: '1', name: 'Legendary', rarity: 1 },
     { id: '2', name: 'Epic', rarity: 2 },
-    { id: '3', name: 'Common A', rarity: 5 },
+    { id: '3', name: 'Rare A', rarity: 3 },
     { id: '4', name: 'Common B', rarity: 5 },
   ];
 
-  // Set pity counter to 5 (meaning 5 previous spins did not hit rarity <= 2)
+  // Set spinsSinceTier3OrBetter to 14 (meaning 14 previous spins did not hit rarity <= 3)
   const state = createRouletteState({
     beasts,
     seed: 12345,
-    pityCounter: 5,
+    spinsSinceTier3OrBetter: 14,
   });
 
   const res = spin(state);
   assert.ok(res !== null);
-  assert.strictEqual(res.pityTriggered, true, 'Pity must trigger on 6th spin without rare');
-  assert.ok(res.beast.rarity <= 2, `Expected rarity <= 2 on pity, got ${res.beast.rarity}`);
-  assert.strictEqual(state.pityCounter, 0, 'Pity counter must reset after rarity <= 2');
+  assert.strictEqual(res.pityTriggered, true, 'Pity must trigger on 15th spin without rare');
+  assert.ok(res.beast.rarity <= 3, `Expected rarity <= 3 on pity, got ${res.beast.rarity}`);
+  assert.strictEqual(state.spinsSinceTier3OrBetter, 0, 'Pity counter must reset after rarity <= 3');
 
   // Test that non-rare spins increment pity counter
   const commonOnlyState = createRouletteState({
     beasts: [{ id: '9', name: 'Common C', rarity: 5 }],
     seed: 42,
-    pityCounter: 0,
+    spinsSinceTier3OrBetter: 0,
   });
   spin(commonOnlyState);
-  assert.strictEqual(commonOnlyState.pityCounter, 1);
+  assert.strictEqual(commonOnlyState.spinsSinceTier3OrBetter, 1);
 });
 
 test('zone: tameZoneWidth and resolveTame validation', () => {

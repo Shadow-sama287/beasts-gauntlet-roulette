@@ -18,7 +18,17 @@ import {
   isMarketLocked,
 } from '../engine.js';
 import beastData from '../beasts.json';
-import { playAttackSound, playCritSound, playMissSound, playLevelUpSound, playCatchSound, playGoodSound, playBadSound, playTick } from '../audio.js';
+import {
+  playAttackSound,
+  playCritSound,
+  playMissSound,
+  playLevelUpSound,
+  playCatchSound,
+  playGoodSound,
+  playBadSound,
+  playTick,
+  playPulseSound,
+} from '../audio.js';
 import { handleArtError, artForBeast } from '../beastLoader.js';
 import { TIER_COLORS, TIER_NAMES } from '../roulette.js';
 
@@ -28,9 +38,22 @@ export function resetGauntletSession() {
   activeGauntletGame = null;
 }
 
+// ---------------- Pixel SVGs (Replacing Emojis) ----------------
+const ICONS = {
+  door: `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" class="pixel-icon"><path d="M4 2h16v20H4V2zm2 2v16h12V4H6zm8 7a1.5 1.5 0 110 3 1.5 1.5 0 010-3z"/></svg>`,
+  skull: `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" class="pixel-icon"><path d="M12 2a9 9 0 00-9 9c0 3.1 1.6 5.8 4 7.4V22h10v-3.6c2.4-1.6 4-4.3 4-7.4a9 9 0 00-9-9zm-3.5 8a2 2 0 110 4 2 2 0 010-4zm7 0a2 2 0 110 4 2 2 0 010-4zM10 18h4v2h-4v-2z"/></svg>`,
+  crown: `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" class="pixel-icon"><path d="M3 19h18v2H3v-2zm1-9l4 5 4-7 4 7 4-5 1 7H3l1-7z"/></svg>`,
+  coin: `<svg viewBox="0 0 24 24" width="16" height="16" fill="var(--gold)" class="pixel-icon coin-icon"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/><text x="12" y="16" font-size="12" font-weight="bold" fill="currentColor" text-anchor="middle">G</text></svg>`,
+  bolt: `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" class="pixel-icon"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>`,
+  potion: `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" class="pixel-icon"><path d="M9 2h6v2H9V2zm1 3h4v2h-4V5zm-4 4h12l2 11a2 2 0 01-2 2H6a2 2 0 01-2-2l2-11zm3 4v5h6v-5H9z"/></svg>`,
+  sword: `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" class="pixel-icon"><path d="M19 3l2 2-10 10-2-2L19 3zM7 15l2 2-3 3-2-2 3-3zm-4 4l2-2 2 2-2 2-2-2z"/></svg>`,
+  shield: `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" class="pixel-icon"><path d="M12 2L4 5v6.5c0 5.5 3.4 10.7 8 12 4.6-1.3 8-6.5 8-12V5l-8-3zm0 2.2l6 2.3v5c0 4.5-2.7 8.8-6 10-3.3-1.2-6-5.5-6-10V6.5l6-2.3z"/></svg>`,
+  trophy: `<svg viewBox="0 0 24 24" width="22" height="22" fill="var(--gold)" class="pixel-icon"><path d="M18 2H6v2H2v6c0 3.3 2.7 6 6 6h1.2c.8 1.4 2.1 2.4 3.8 2.8V21H8v2h8v-2h-5v-2.2c1.7-.4 3-1.4 3.8-2.8H16c3.3 0 6-2.7 6-6V4h-4V2zM4 6h2v4c0 2.2-1.8 4-4 4V6zm14 4V6h2v8c-2.2 0-4-1.8-4-4z"/></svg>`,
+  sparkle: `<svg viewBox="0 0 24 24" width="16" height="16" fill="var(--gold)" class="pixel-icon"><path d="M12 2l2.5 7.5L22 12l-7.5 2.5L12 22l-2.5-7.5L2 12l7.5-2.5z"/></svg>`,
+};
+
 function getWeaponSvg(type) {
   if (type === 'Blade') {
-    // Hunter Bow & Arrow
     return `<svg viewBox="0 0 24 24" class="weapon-svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M5 21C5 12.163 12.163 5 21 5" />
       <path d="M5 21l16-16" />
@@ -39,7 +62,6 @@ function getWeaponSvg(type) {
     </svg>`;
   }
   if (type === 'Bludgeon') {
-    // Brute Warhammer / Heavy Mace
     return `<svg viewBox="0 0 24 24" class="weapon-svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M15 4l5 5-2.5 2.5-5-5L15 4z" />
       <path d="M12.5 6.5l-9 9a1.414 1.414 0 0 0 0 2l2 2a1.414 1.414 0 0 0 2 0l9-9" />
@@ -47,7 +69,6 @@ function getWeaponSvg(type) {
       <path d="M11 3l3 3" />
     </svg>`;
   }
-  // Magical Arcane Wand / Staff
   return `<svg viewBox="0 0 24 24" class="weapon-svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
     <path d="M14.5 6.5L4 17l3 3L17.5 9.5" />
     <path d="M18 2v3M21 5h-3" />
@@ -55,6 +76,15 @@ function getWeaponSvg(type) {
     <circle cx="17.5" cy="6.5" r="2.5" fill="currentColor" />
   </svg>`;
 }
+
+const STAT_INFO = {
+  STR: 'Strength: Increases weapon strike damage in combat (+DMG).',
+  DEX: 'Dexterity: Increases escape chance when fleeing and helps disarm traps.',
+  VIT: 'Vitality: Increases maximum adventurer health (+15 Max HP per point).',
+  INT: 'Intelligence: Grants sharp perception to detect and avoid dungeon traps.',
+  WIS: 'Wisdom: Prevents enemy monster ambushes and surprise attacks.',
+  CHA: 'Charisma: Grants market discounts on Camp potions and gear upgrades.',
+};
 
 export function createGauntletView({
   companion,
@@ -76,6 +106,7 @@ export function createGauntletView({
   let showFullLog = false;
   let dungeonClearedLoot = null;
   let companionFilter = 'all'; // 'all' | 'Magical' | 'Hunter' | 'Brute'
+  let activeNamedReveal = null;
 
   function initGame() {
     g = activeGauntletGame = createGame({
@@ -85,12 +116,10 @@ export function createGauntletView({
       companionId: currentCompanion ? Number(currentCompanion.id) || 1 : 1,
       config: DEMO_CONFIG,
     });
-    // Start at Camp
     notifyNavState();
     render();
   }
 
-  // Ensure active game is instantiated on Camp arrival
   if (!g) {
     g = activeGauntletGame = createGame({
       beastData,
@@ -102,20 +131,43 @@ export function createGauntletView({
   }
   notifyNavState();
 
+  function showToast(msg) {
+    const existing = document.querySelector('.gauntlet-toast');
+    if (existing) existing.remove();
+    const t = document.createElement('div');
+    t.className = 'gauntlet-toast toast';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 2400);
+  }
+
   function notifyNavState() {
-    // Hide bottom tab bar while inside active dungeon exploration/battle; show in Camp or after victory
     const inActiveDungeon = Boolean(g && g.dungeon && !g.dungeon.cleared && g.phase !== 'dead');
     if (onDungeonStateChange) onDungeonStateChange(inActiveDungeon);
     document.body.classList.toggle('hide-bottom-nav', inActiveDungeon);
+  }
+
+  function checkLowHpGuard() {
+    if (!g) return;
+    const isLow = g.hp <= g.maxHp * 0.3;
+    container.classList.toggle('low-hp-vignette', isLow);
+
+    if (isLow) {
+      playPulseSound(180);
+      if (autoBattle) {
+        autoBattle = false;
+        if (autoBattleTimer) clearInterval(autoBattleTimer);
+        showToast(`[LOW HP] Auto-battle stopped: (${g.hp}/${g.maxHp})! Heal or proceed manually.`);
+        render();
+      }
+    }
   }
 
   function triggerCombatFeedback({ dmgDealt, dmgTaken, isCrit, weaponType, compDmg = 0 }) {
     const beastCard = container.querySelector('.battle-beast-card');
     const artWrap = container.querySelector('.battle-art-wrap');
 
-    // 1. Floating damage on enemy: staggered offsets to never overlap!
     if (beastCard && dmgDealt > 0) {
-      // Main hero damage
       const heroDmgEl = document.createElement('div');
       heroDmgEl.className = `combat-float-number hero-float ${isCrit ? 'crit' : 'dmg'}`;
       heroDmgEl.textContent = isCrit ? `-${dmgDealt} CRIT!` : `-${dmgDealt}`;
@@ -123,11 +175,10 @@ export function createGauntletView({
       heroDmgEl.style.top = '25%';
       beastCard.appendChild(heroDmgEl);
 
-      // Companion damage offset to the left
       if (compDmg > 0) {
         const compDmgEl = document.createElement('div');
         compDmgEl.className = 'combat-float-number comp-float';
-        compDmgEl.textContent = `🐾 -${compDmg}`;
+        compDmgEl.textContent = `-${compDmg} ALLY`;
         compDmgEl.style.left = '22%';
         compDmgEl.style.top = '40%';
         beastCard.appendChild(compDmgEl);
@@ -142,14 +193,12 @@ export function createGauntletView({
         const slash = document.createElement('div');
         slash.className = `weapon-slash-fx ${weaponType ? weaponType.toLowerCase() : 'blade'}`;
         artWrap.appendChild(slash);
-
         setTimeout(() => { if (slash.parentNode) slash.remove(); }, 600);
       }
 
       setTimeout(() => { if (heroDmgEl.parentNode) heroDmgEl.remove(); }, 950);
     }
 
-    // 2. Damage taken: floating hurt number & vignette flash
     if (dmgTaken > 0) {
       container.classList.remove('screen-damage-vignette');
       void container.offsetWidth;
@@ -170,49 +219,8 @@ export function createGauntletView({
         container.classList.remove('screen-damage-vignette');
       }, 400);
     }
-  }
 
-  function triggerHealFeedback(amount) {
-    const target = container.querySelector('.camp-hero-bar') || container.querySelector('.gauntlet-header-panel');
-    if (target) {
-      const healEl = document.createElement('div');
-      healEl.className = 'combat-float-number heal';
-      healEl.textContent = `+${amount} HP 💚`;
-      target.style.position = 'relative';
-      target.appendChild(healEl);
-      target.classList.remove('healed-flash');
-      void target.offsetWidth;
-      target.classList.add('healed-flash');
-      setTimeout(() => { if (healEl.parentNode) healEl.remove(); }, 900);
-      setTimeout(() => { target.classList.remove('healed-flash'); }, 700);
-    }
-  }
-
-  function triggerUpgradeFeedback(label, cardSelector) {
-    const card = container.querySelector(cardSelector);
-    if (card) {
-      const upEl = document.createElement('div');
-      upEl.className = 'combat-float-number upgrade';
-      upEl.textContent = `${label} UPGRADED! ✨`;
-      card.style.position = 'relative';
-      card.appendChild(upEl);
-      card.classList.remove('upgrade-flash');
-      void card.offsetWidth;
-      card.classList.add('upgrade-flash');
-      setTimeout(() => { if (upEl.parentNode) upEl.remove(); }, 900);
-      setTimeout(() => { card.classList.remove('upgrade-flash'); }, 700);
-    }
-  }
-
-  function triggerStatFeedback(statName, targetEl) {
-    if (targetEl) {
-      const stEl = document.createElement('div');
-      stEl.className = 'combat-float-number stat';
-      stEl.textContent = `+1 ${statName}! ✨`;
-      targetEl.style.position = 'relative';
-      targetEl.appendChild(stEl);
-      setTimeout(() => { if (stEl.parentNode) stEl.remove(); }, 850);
-    }
+    checkLowHpGuard();
   }
 
   function handleAutoBattle() {
@@ -221,24 +229,40 @@ export function createGauntletView({
       if (autoBattleTimer) clearInterval(autoBattleTimer);
       return;
     }
+
+    if (g.hp <= g.maxHp * 0.3) {
+      autoBattle = false;
+      showToast(`[LOW HP] Auto-battle stopped: (${g.hp}/${g.maxHp})! Heal or proceed manually.`);
+      render();
+      return;
+    }
+
     if (g.phase === 'battle') {
       executeAttack();
-    } else if (g.phase === 'explore' && g.dungeon && !g.dungeon.cleared && g.hp > g.maxHp * 0.3) {
+    } else if (g.phase === 'explore' && g.dungeon && !g.dungeon.cleared) {
       executeStep();
     }
   }
 
   function executeStep() {
     if (!g || g.phase !== 'explore') return;
-    const oldHp = g.hp;
 
-    // Use dungeon step if inside dungeon, else start dungeon
     let ev;
     if (g.dungeon && !g.dungeon.cleared) {
       ev = stepDungeon(g);
     } else {
       startDungeon(g, { stepsCount: 12, floor: (g.dungeon?.floor || 0) + 1 });
       ev = stepDungeon(g);
+    }
+
+    // Beasts encountered in gauntlet are registered as discovered (not tamed)
+    if (g.beast && albumData) {
+      const bId = String(g.beast.id);
+      if (!albumData.discoveredIds) albumData.discoveredIds = [];
+      if (!albumData.discoveredIds.includes(bId) && !albumData.caughtIds.includes(bId)) {
+        albumData.discoveredIds.push(bId);
+        saveAlbum(albumData);
+      }
     }
 
     notifyNavState();
@@ -256,6 +280,8 @@ export function createGauntletView({
     } else if (ev.kind === 'dungeon_cleared' || (g.dungeon && g.dungeon.cleared)) {
       handleDungeonCleared();
     }
+
+    checkLowHpGuard();
 
     if (autoBattle && g.phase !== 'dead' && g.phase !== 'battle') {
       setTimeout(handleAutoBattle, 450);
@@ -277,9 +303,23 @@ export function createGauntletView({
     const dmgTaken = Math.max(0, oldPlayerHp - g.hp);
 
     if (ev.kind === 'victory') {
-      if (ev.captured && onCaptureNamed) {
-        playCatchSound(ev.defeated ? ev.defeated.tier : 1);
-        onCaptureNamed(ev.defeated || g.beast);
+      // Register defeated beast as discovered in Dex
+      const defeatedDef = ev.defeated || g.beast;
+      if (defeatedDef && albumData) {
+        const bId = String(defeatedDef.id);
+        if (!albumData.discoveredIds) albumData.discoveredIds = [];
+        if (!albumData.discoveredIds.includes(bId) && !albumData.caughtIds.includes(bId)) {
+          albumData.discoveredIds.push(bId);
+          saveAlbum(albumData);
+        }
+      }
+
+      if (ev.captured) {
+        const capturedDef = ev.defeated || g.beast;
+        playCatchSound(capturedDef.tier || 1);
+        if (onCaptureNamed) onCaptureNamed(capturedDef);
+        // Show Named Reveal Modal
+        activeNamedReveal = capturedDef;
       }
       if (ev.dungeonCleared) {
         handleDungeonCleared();
@@ -326,6 +366,25 @@ export function createGauntletView({
   function handleDungeonCleared() {
     if (!g || !g.dungeon) return;
     playLevelUpSound();
+
+    // Floor completion bonus XP & level-up progression
+    const floorBonusXp = (g.dungeon.floor || 1) * 25;
+    g.xp = (g.xp || 0) + floorBonusXp;
+    g.dungeon.loot.xp = (g.dungeon.loot.xp || 0) + floorBonusXp;
+
+    const newLvl = levelFromXp(g.xp);
+    if (newLvl > g.level) {
+      const gained = newLvl - g.level;
+      g.level = newLvl;
+      g.pendingStatPoints = (g.pendingStatPoints || 0) + gained;
+      g.phase = 'levelup';
+    } else {
+      // Guaranteed floor clear stat upgrade point: ALWAYS award at least 1 point and bump level!
+      g.pendingStatPoints = (g.pendingStatPoints || 0) + 1;
+      g.level += 1;
+      g.phase = 'levelup';
+    }
+
     dungeonClearedLoot = {
       floor: g.dungeon.floor,
       gold: g.dungeon.loot.gold,
@@ -336,8 +395,7 @@ export function createGauntletView({
     notifyNavState();
   }
 
-  // ----------------- RENDER METHODS -----------------
-
+  // ----------------- RENDER ROOT -----------------
   function render() {
     container.innerHTML = '';
 
@@ -352,13 +410,16 @@ export function createGauntletView({
       return;
     }
 
-    // If dungeon just cleared, show Dungeon Cleared Screen
+    if (activeNamedReveal) {
+      container.appendChild(createNamedRevealScreen(activeNamedReveal));
+      return;
+    }
+
     if (dungeonClearedLoot) {
       container.appendChild(createDungeonClearedScreen());
       return;
     }
 
-    // Active Dungeon or Camp Hub
     const isAtCamp = !g.dungeon || g.dungeon.cleared;
     if (isAtCamp) {
       container.appendChild(createCampScreen());
@@ -367,7 +428,7 @@ export function createGauntletView({
     }
   }
 
-  // 1. CAMP EXPEDITION SCREEN (Pre-run hub & inter-floor staging)
+  // 1. CAMP HUB SCREEN
   function createCampScreen() {
     const wrap = document.createElement('div');
     wrap.className = 'camp-scene-wrap arcade-panel';
@@ -378,18 +439,17 @@ export function createGauntletView({
     const aPrice = upgradePrice(g, 'armor');
     const hpPct = Math.min(100, Math.max(0, Math.round((g.hp / g.maxHp) * 100)));
 
-    // Roster of captured/owned beasts for companion ally picker
-    const caughtSet = new Set(albumData && albumData.caughtIds ? albumData.caughtIds : []);
-    if (albumData && albumData.capturedNamed) {
-      albumData.capturedNamed.forEach((nb) => { if (nb && nb.id) caughtSet.add(nb.id); });
-    }
-
+    const caughtSet = new Set(albumData && albumData.caughtIds ? albumData.caughtIds.map(String) : []);
     let capturedBeasts = beasts.filter((b) => caughtSet.has(String(b.id)));
-    if (capturedBeasts.length === 0) {
-      capturedBeasts = currentCompanion ? [currentCompanion] : beasts.slice(0, 4);
+    if (capturedBeasts.length === 0 && currentCompanion) {
+      capturedBeasts = [currentCompanion];
     }
     if (!currentCompanion && capturedBeasts.length > 0) {
       currentCompanion = capturedBeasts[0];
+    }
+    if (currentCompanion) {
+      const fVal = (albumData?.friendliness?.[String(currentCompanion.id)]) || currentCompanion.friendliness || 10;
+      currentCompanion.friendliness = fVal;
       g.companion = currentCompanion;
     }
 
@@ -405,36 +465,20 @@ export function createGauntletView({
       : capturedBeasts.filter((b) => (b.type || 'Hunter') === companionFilter);
 
     const weaponOptions = [
-      {
-        key: 'Blade',
-        name: 'Blade',
-        type: 'Hunter',
-        typeClass: 'hunter',
-        advantage: 'Strong vs Magical (+50%)',
-      },
-      {
-        key: 'Bludgeon',
-        name: 'Bludgeon',
-        type: 'Brute',
-        typeClass: 'brute',
-        advantage: 'Strong vs Hunter (+50%)',
-      },
-      {
-        key: 'Magic',
-        name: 'Magic',
-        type: 'Magical',
-        typeClass: 'magical',
-        advantage: 'Strong vs Brute (+50%)',
-      },
+      { key: 'Blade', name: 'Blade', type: 'Hunter', typeClass: 'hunter', advantage: 'Strong vs Magical (+50%)' },
+      { key: 'Bludgeon', name: 'Bludgeon', type: 'Brute', typeClass: 'brute', advantage: 'Strong vs Hunter (+50%)' },
+      { key: 'Magic', name: 'Magic', type: 'Magical', typeClass: 'magical', advantage: 'Strong vs Brute (+50%)' },
     ];
 
     wrap.innerHTML = `
-      <!-- Camp Header (Clean spacing, zero empty gap) -->
+      <!-- Camp Header -->
       <div class="page-top-header">
         <button id="btn-camp-exit" class="btn-subview-back" title="Return to Title">‹</button>
         <div class="page-top-titles">
-          <h1 class="arcade-title" style="color:var(--gold);">⚔️ GAUNTLET CAMP</h1>
-          <span class="subhead">${nextFloor > 1 ? `Floor ${nextFloor - 1} Cleared · ` : ''}Prepare gear & ally for ${nextFloor === 1 ? 'Floor 1' : `Floor ${nextFloor}`}</span>
+          <h1 class="arcade-title" style="color:var(--gold); display:flex; align-items:center; gap:6px;">
+            ${ICONS.sword} GAUNTLET CAMP
+          </h1>
+          <span class="subhead">${nextFloor > 1 ? `Floor ${nextFloor - 1} Cleared · ` : ''}Prepare gear & companion for Floor ${nextFloor}</span>
         </div>
       </div>
 
@@ -444,6 +488,7 @@ export function createGauntletView({
           <div style="display:flex; align-items:center; gap:8px;">
             <strong style="font-size:0.95rem; white-space:nowrap;">Adventurer (Lv. ${g.level})</strong>
             <span class="badge-tag" style="background:#221d38; color:var(--gold); font-size:0.68rem;">FLOOR ${nextFloor}</span>
+            ${g.pendingStatPoints > 0 ? `<span class="badge-tag pulse" style="background:rgba(245, 197, 66, 0.25); border:1px solid var(--gold); color:var(--gold); font-size:0.68rem;">★ +${g.pendingStatPoints} AT CAMP</span>` : ''}
           </div>
           <div style="margin-top:6px; max-width:220px;">
             <div style="display:flex; justify-content:space-between; font-size:0.72rem; color:var(--muted); margin-bottom:2px;">
@@ -457,58 +502,58 @@ export function createGauntletView({
         </div>
 
         <div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
-          <div class="num font-bold" style="color:var(--gold); font-size:1.25rem; text-shadow:0 0 10px rgba(245, 197, 66, 0.3);">🪙 ${g.gold}g</div>
-          ${g.pendingStatPoints > 0
-            ? `<div class="badge-tag pulse" style="background:rgba(245, 197, 66, 0.2); border:1px solid var(--gold); color:var(--gold); font-size:0.7rem; font-weight:bold;">★ ${g.pendingStatPoints} PTS AVAILABLE</div>`
-            : `<div style="font-size:0.7rem; color:var(--muted);">${g.kills} beasts slain</div>`
-          }
+          <div class="num font-bold" style="color:var(--gold); font-size:1.2rem; display:flex; align-items:center; gap:4px;">
+            ${ICONS.coin} ${g.gold}g
+          </div>
+          <div style="font-size:0.7rem; color:var(--muted);">${g.kills} beasts slain</div>
         </div>
       </div>
 
-      <!-- Stats Summary Strip -->
-      <div class="camp-stats-strip">
-        <span>STR: <strong>${g.stats.STR}</strong></span>
-        <span>DEX: <strong>${g.stats.DEX}</strong></span>
-        <span>VIT: <strong>${g.stats.VIT}</strong></span>
-        <span>INT: <strong>${g.stats.INT}</strong></span>
-        <span>WIS: <strong>${g.stats.WIS}</strong></span>
-        <span>CHA: <strong>${g.stats.CHA}</strong></span>
-        ${g.stats.CHA > 0 ? `<span style="color:var(--gold);">🪙 -${g.stats.CHA * 2}g pot / -${g.stats.CHA}g gear</span>` : ''}
+      <!-- Stats Summary Strip (Tappable for info) -->
+      <div class="camp-stats-strip" title="Tap any stat to see details">
+        <button class="stat-info-pill" data-stat="STR">STR: <strong>${g.stats.STR}</strong></button>
+        <button class="stat-info-pill" data-stat="DEX">DEX: <strong>${g.stats.DEX}</strong></button>
+        <button class="stat-info-pill" data-stat="VIT">VIT: <strong>${g.stats.VIT}</strong></button>
+        <button class="stat-info-pill" data-stat="INT">INT: <strong>${g.stats.INT}</strong></button>
+        <button class="stat-info-pill" data-stat="WIS">WIS: <strong>${g.stats.WIS}</strong></button>
+        <button class="stat-info-pill" data-stat="CHA">CHA: <strong>${g.stats.CHA}</strong></button>
       </div>
 
-      <!-- Banked Stat Points Allocation (if any) -->
+      <!-- Banked Stat Points Allocation -->
       ${g.pendingStatPoints > 0 ? `
-        <div class="camp-card-box stat-alloc-panel" style="border-color:var(--gold); background:rgba(245, 197, 66, 0.05);">
+        <div class="camp-card-box stat-alloc-panel" style="border: 2px solid var(--gold); background: rgba(245, 197, 66, 0.08); box-shadow: 0 0 16px rgba(245, 197, 66, 0.2);">
           <div style="display:flex; justify-content:space-between; align-items:center;">
-            <div class="camp-box-title" style="color:var(--gold);">★ LEVEL UP! ALLOCATE STAT POINTS (${g.pendingStatPoints} LEFT)</div>
+            <div class="camp-box-title" style="color:var(--gold); font-size:0.85rem; display:flex; align-items:center; gap:5px;">
+              ★ LEVEL UP! ALLOCATE STAT POINTS
+            </div>
+            <span class="badge-tag pulse" style="background:var(--gold); color:#000; font-weight:800; font-size:0.75rem; padding:2px 8px; border-radius:12px;">
+              ${g.pendingStatPoints} AVAILABLE
+            </span>
           </div>
           <div class="stat-alloc-grid" style="display:grid; grid-template-columns: repeat(3, 1fr); gap:6px; margin-top:8px;">
-            <button class="stat-alloc-btn" data-s="STR"><span>STR (${g.stats.STR})</span><small>+Damage</small></button>
-            <button class="stat-alloc-btn" data-s="DEX"><span>DEX (${g.stats.DEX})</span><small>+Escape/Traps</small></button>
-            <button class="stat-alloc-btn" data-s="VIT"><span>VIT (${g.stats.VIT})</span><small>+15 Max HP</small></button>
-            <button class="stat-alloc-btn" data-s="INT"><span>INT (${g.stats.INT})</span><small>+Avoid Traps</small></button>
-            <button class="stat-alloc-btn" data-s="WIS"><span>WIS (${g.stats.WIS})</span><small>+Avoid Ambush</small></button>
-            <button class="stat-alloc-btn" data-s="CHA"><span>CHA (${g.stats.CHA})</span><small>+Discount</small></button>
+            <button class="stat-alloc-btn" data-s="STR"><strong>+1 STR</strong><span>(${g.stats.STR})</span><small>+Damage</small></button>
+            <button class="stat-alloc-btn" data-s="DEX"><strong>+1 DEX</strong><span>(${g.stats.DEX})</span><small>+Flee/Trap</small></button>
+            <button class="stat-alloc-btn" data-s="VIT"><strong>+1 VIT</strong><span>(${g.stats.VIT})</span><small>+15 Max HP</small></button>
+            <button class="stat-alloc-btn" data-s="INT"><strong>+1 INT</strong><span>(${g.stats.INT})</span><small>+Avoid Trap</small></button>
+            <button class="stat-alloc-btn" data-s="WIS"><strong>+1 WIS</strong><span>(${g.stats.WIS})</span><small>+Avoid Ambush</small></button>
+            <button class="stat-alloc-btn" data-s="CHA"><strong>+1 CHA</strong><span>(${g.stats.CHA})</span><small>+Discount</small></button>
           </div>
         </div>
       ` : ''}
 
-      <!-- 1. Weapon Selection Cards (Clear cards with SVG icons, type name & arrow diagram) -->
+      <!-- 1. Weapon Selection Cards -->
       <div class="camp-card-box">
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <div class="camp-box-title">1. CHOOSE COMBAT WEAPON</div>
           <span style="font-size:0.7rem; color:var(--muted);">Current: <strong style="color:var(--gold);">${g.weapon.type} T${g.weapon.tier}</strong></span>
         </div>
-
         <div class="weapon-pick-row">
           ${weaponOptions
             .map((w) => {
               const isSelected = chosenWeapon === w.key;
               return `
                 <button class="weapon-pick-card ${w.typeClass} ${isSelected ? 'active' : ''}" data-w="${w.key}">
-                  <div class="weapon-svg-wrap">
-                    ${getWeaponSvg(w.key)}
-                  </div>
+                  <div class="weapon-svg-wrap">${getWeaponSvg(w.key)}</div>
                   <div class="wep-title">${w.name}</div>
                   <div class="wep-type-tag">${w.type}</div>
                   <div class="wep-advantage-note">${w.advantage}</div>
@@ -518,33 +563,20 @@ export function createGauntletView({
             })
             .join('')}
         </div>
-
-        <!-- Combat Triangle Arrow Diagram -->
-        <div class="combat-triangle-diagram">
-          <div class="tri-node brute"><span class="tri-icon">🔨</span><strong>Brute</strong></div>
-          <div class="tri-arrow"><span>beats</span>➔</div>
-          <div class="tri-node hunter"><span class="tri-icon">🏹</span><strong>Hunter</strong></div>
-          <div class="tri-arrow"><span>beats</span>➔</div>
-          <div class="tri-node magical"><span class="tri-icon">🪄</span><strong>Magical</strong></div>
-          <div class="tri-arrow"><span>beats</span>➔</div>
-          <div class="tri-node brute mini"><span class="tri-icon">🔨</span></div>
-        </div>
-        <div class="triangle-note">Combat Triangle: Strong type deals +50% DMG · Weak type deals -50% DMG</div>
       </div>
 
-      <!-- 2. Companion Selector Carousel (with Combat Type Filter Chips) -->
+      <!-- 2. Companion Selector Carousel -->
       <div class="camp-card-box">
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:4px;">
           <div class="camp-box-title">2. CHOOSE COMPANION ALLY</div>
-          <span class="badge-tag" style="background:#1d1b30; color:var(--gold); font-size:0.68rem;">★ STRIKES EVERY TURN</span>
+          <span class="badge-tag" style="background:#1d1b30; color:var(--gold); font-size:0.68rem;">★ STRIKES EVERY TURN (8+ DMG)</span>
         </div>
 
-        <!-- Filter Chips Row to easily filter all tamed companions -->
         <div class="comp-filter-row">
           <button class="comp-filter-chip ${companionFilter === 'all' ? 'active' : ''}" data-cfilter="all">All (${compCounts.all})</button>
-          <button class="comp-filter-chip ${companionFilter === 'Magical' ? 'active' : ''}" data-cfilter="Magical" style="color:var(--t2);">🪄 Magical (${compCounts.Magical})</button>
-          <button class="comp-filter-chip ${companionFilter === 'Hunter' ? 'active' : ''}" data-cfilter="Hunter" style="color:var(--t4);">🏹 Hunter (${compCounts.Hunter})</button>
-          <button class="comp-filter-chip ${companionFilter === 'Brute' ? 'active' : ''}" data-cfilter="Brute" style="color:var(--t1);">🔨 Brute (${compCounts.Brute})</button>
+          <button class="comp-filter-chip ${companionFilter === 'Magical' ? 'active' : ''}" data-cfilter="Magical" style="color:var(--t2);">Magical (${compCounts.Magical})</button>
+          <button class="comp-filter-chip ${companionFilter === 'Hunter' ? 'active' : ''}" data-cfilter="Hunter" style="color:var(--t4);">Hunter (${compCounts.Hunter})</button>
+          <button class="comp-filter-chip ${companionFilter === 'Brute' ? 'active' : ''}" data-cfilter="Brute" style="color:var(--t1);">Brute (${compCounts.Brute})</button>
         </div>
 
         <div class="companion-snap-carousel" id="companion-picker-carousel">
@@ -553,19 +585,21 @@ export function createGauntletView({
               const isSelected = currentCompanion && String(currentCompanion.id) === String(b.id);
               const tierCol = TIER_COLORS[b.rarity] || '#fff';
               const art = artForBeast(b.id) || b.art || `/beasts/art/${b.id}.svg`;
+              const fVal = (albumData?.friendliness?.[String(b.id)]) || b.friendliness || 10;
               return `
                 <div class="companion-snap-card ${isSelected ? 'selected' : ''}" data-id="${b.id}" style="border-color:${isSelected ? 'var(--gold)' : 'var(--line)'};">
                   <div class="snap-card-art">
                     <img src="${art}" alt="${b.name}" class="comp-thumb-img" data-id="${b.id}" loading="lazy" />
                   </div>
                   <div class="snap-card-meta">
-                    <div class="snap-card-name" title="${b.name}">${b.name}</div>
+                    <div class="snap-card-name">${b.name}</div>
                     <div class="snap-card-type-row">
                       <span style="color:${tierCol}; font-weight:bold;">T${b.rarity}</span>
                       <span class="badge-tag" style="font-size:0.62rem; padding:1px 4px;">${b.type || 'Hunter'}</span>
-                      ${(b.isArtathon || Number(b.id) >= 10000) ? '<span class="artathon-pill-badge" style="font-size:0.55rem; padding:0 3px;">ARTATHON</span>' : ''}
                     </div>
-                    <div class="snap-card-perk">Strikes each turn</div>
+                    <div style="font-size:0.65rem; color:#ff5e94; font-weight:bold; margin-top:2px;">
+                      ♥ ${fVal}% (+${fVal}% Atk / -${Math.round(fVal * 0.4)}% Def)
+                    </div>
                   </div>
                   <div class="snap-card-badge">${isSelected ? 'EQUIPPED ★' : 'SELECT'}</div>
                 </div>
@@ -579,7 +613,7 @@ export function createGauntletView({
         </div>
       </div>
 
-      <!-- 3. Camp Provisions & Armory (Market & Gear Upgrades) -->
+      <!-- 3. Camp Provisions & Armory -->
       <div class="camp-card-box">
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <div class="camp-box-title">3. CAMP PROVISIONS & FORGE</div>
@@ -587,9 +621,8 @@ export function createGauntletView({
         </div>
 
         <div class="camp-market-grid">
-          <!-- Potion Card -->
           <div class="camp-market-card">
-            <span class="mkt-icon">🧪</span>
+            <span class="mkt-icon">${ICONS.potion}</span>
             <div class="mkt-label">Heal Potion</div>
             <div class="mkt-tier">+20 HP</div>
             <div class="mkt-price">${pPrice}g</div>
@@ -598,9 +631,8 @@ export function createGauntletView({
             </button>
           </div>
 
-          <!-- Weapon Upgrade Card -->
           <div class="camp-market-card">
-            <span class="mkt-icon">⚔️</span>
+            <span class="mkt-icon">${ICONS.sword}</span>
             <div class="mkt-label">${g.weapon.type}</div>
             <div class="mkt-tier">${wPrice ? `T${g.weapon.tier} ➔ T${g.weapon.tier - 1}` : `T${g.weapon.tier} (MAX)`}</div>
             <div class="mkt-price">${wPrice ? `${wPrice}g` : 'MAXED'}</div>
@@ -609,9 +641,8 @@ export function createGauntletView({
             </button>
           </div>
 
-          <!-- Armor Upgrade Card -->
           <div class="camp-market-card">
-            <span class="mkt-icon">🛡️</span>
+            <span class="mkt-icon">${ICONS.shield}</span>
             <div class="mkt-label">${g.armor.type}</div>
             <div class="mkt-tier">${aPrice ? `T${g.armor.tier} ➔ T${g.armor.tier - 1}` : `T${g.armor.tier} (MAX)`}</div>
             <div class="mkt-price">${aPrice ? `${aPrice}g` : 'MAXED'}</div>
@@ -622,7 +653,7 @@ export function createGauntletView({
         </div>
       </div>
 
-      <!-- Main Action Button (Big gold primary, one line, always legible, disabled only when no weapon) -->
+      <!-- Action Button -->
       <div class="camp-action-zone" style="margin-top:6px;">
         <button id="btn-start-gauntlet" class="btn-primary arcade-btn gauntlet-enter-btn" ${!chosenWeapon ? 'disabled' : ''}>
           ENTER THE GAUNTLET ▶
@@ -630,10 +661,15 @@ export function createGauntletView({
       </div>
     `;
 
-    // Event listeners
-    wrap.querySelector('#btn-camp-exit').onclick = () => {
-      if (onExit) onExit();
-    };
+    // Listeners
+    wrap.querySelector('#btn-camp-exit').onclick = () => { if (onExit) onExit(); };
+
+    wrap.querySelectorAll('.stat-info-pill').forEach((btn) => {
+      btn.onclick = () => {
+        const s = btn.dataset.stat;
+        showToast(STAT_INFO[s] || s);
+      };
+    });
 
     wrap.querySelectorAll('.stat-alloc-btn').forEach((btn) => {
       btn.onclick = () => {
@@ -641,8 +677,6 @@ export function createGauntletView({
         allocateStat(g, s);
         playLevelUpSound();
         render();
-        const updatedTarget = container.querySelector('.camp-stats-strip') || container.querySelector('.stat-alloc-panel');
-        triggerStatFeedback(s, updatedTarget);
       };
     });
 
@@ -669,11 +703,17 @@ export function createGauntletView({
         const id = card.dataset.id;
         const found = beasts.find((b) => String(b.id) === String(id));
         if (found) {
+          const fVal = (albumData?.friendliness?.[String(found.id)]) || found.friendliness || 10;
+          found.friendliness = fVal;
           currentCompanion = found;
           g.companion = found;
+          if (albumData) {
+            albumData.activeCompanionId = String(found.id);
+            saveAlbum(albumData);
+          }
           playTick(600);
           if (onSelectCompanion) onSelectCompanion(found);
-          else render();
+          render();
         }
       };
     });
@@ -685,33 +725,19 @@ export function createGauntletView({
 
     wrap.querySelector('#btn-camp-potion').onclick = () => {
       const oldHp = g.hp;
-      const bought = buyPotion(g);
-      const healed = Math.max(0, g.hp - oldHp);
-      if (healed > 0) {
-        playGoodSound();
-        render();
-        triggerHealFeedback(healed);
-      } else {
-        render();
-      }
+      buyPotion(g);
+      if (g.hp > oldHp) playGoodSound();
+      render();
     };
 
     wrap.querySelector('#btn-camp-wep').onclick = () => {
-      const bought = buyUpgrade(g, 'weapon');
-      if (bought) {
-        playLevelUpSound();
-        render();
-        triggerUpgradeFeedback(`T${g.weapon.tier} WEAPON`, '.camp-market-card:nth-child(2)');
-      }
+      if (buyUpgrade(g, 'weapon')) playLevelUpSound();
+      render();
     };
 
     wrap.querySelector('#btn-camp-arm').onclick = () => {
-      const bought = buyUpgrade(g, 'armor');
-      if (bought) {
-        playLevelUpSound();
-        render();
-        triggerUpgradeFeedback(`T${g.armor.tier} ARMOR`, '.camp-market-card:nth-child(3)');
-      }
+      if (buyUpgrade(g, 'armor')) playLevelUpSound();
+      render();
     };
 
     wrap.querySelector('#btn-start-gauntlet').onclick = () => {
@@ -723,53 +749,68 @@ export function createGauntletView({
     return wrap;
   }
 
-  // 3. DUNGEON SCREEN (Mini-map HUD, Chamber encounters & Battles)
+  // 2. DUNGEON SCREEN (Parallax Corridor Scene)
   function createDungeonScreen() {
     const wrap = document.createElement('div');
     wrap.className = 'dungeon-run-wrap';
 
     const d = g.dungeon;
     const hpPct = Math.min(100, Math.max(0, Math.round((g.hp / g.maxHp) * 100)));
-    const xpNext = (g.level + 1) * (g.level + 1);
-    const xpPct = Math.min(100, Math.round((g.xp / xpNext) * 100));
+    const chamberIdx = d.stepIndex;
+    const chamberNum = chamberIdx + 1;
 
-    // Top HUD Bar with Mini-map in top-right
+    // Mini-map cells with vector icons in 6x6 grid (36 cells total)
+    // Dynamic procedural path chambers vs empty/wall cells
+    const coordToStep = new Map();
+    d.steps.forEach((step, idx) => {
+      coordToStep.set(`${step.row},${step.col}`, { step, idx });
+    });
+
+    const minimapGridCells = [];
+    for (let r = 0; r < 6; r++) {
+      for (let c = 0; c < 6; c++) {
+        const found = coordToStep.get(`${r},${c}`);
+        if (found) {
+          const { step, idx } = found;
+          const isCurrent = idx === d.stepIndex;
+          const isVisited = step.visited;
+          let iconHtml = '·';
+          let cellClass = 'map-cell map-path-cell';
+
+          if (idx === d.stepsCount - 1) {
+            iconHtml = ICONS.crown;
+            cellClass += ' map-boss';
+          } else if (isVisited) {
+            if (step.type === 'beast') iconHtml = ICONS.skull;
+            else if (step.type === 'trap') iconHtml = ICONS.bolt;
+            else iconHtml = ICONS.coin;
+            cellClass += ' map-visited';
+          } else {
+            cellClass += ' map-unvisited';
+          }
+
+          if (isCurrent) cellClass += ' map-current blink';
+
+          minimapGridCells.push(`<div class="${cellClass}" title="Chamber ${idx + 1} (${step.type})">${iconHtml}</div>`);
+        } else {
+          // Off-path cell: wall / empty cell
+          minimapGridCells.push(`<div class="map-cell map-wall" title="Wall"></div>`);
+        }
+      }
+    }
+    const minimapCellsHtml = minimapGridCells.join('');
+
     const header = document.createElement('header');
     header.className = 'dungeon-hud-header';
-
-    // Generate Mini-map cells HTML
-    const minimapCellsHtml = d.steps
-      .map((step, idx) => {
-        const isCurrent = idx === d.stepIndex;
-        const isVisited = step.visited;
-        let icon = '·';
-        let cellClass = 'map-cell';
-
-        if (idx === d.stepsCount - 1) {
-          icon = '👑';
-          cellClass += ' map-boss';
-        } else if (isVisited) {
-          if (step.type === 'beast') icon = '💀';
-          else if (step.type === 'trap') icon = '⚡';
-          else icon = '🪙';
-          cellClass += ' map-visited';
-        } else {
-          cellClass += ' map-unknown';
-        }
-
-        if (isCurrent) cellClass += ' map-current blink';
-
-        return `<div class="${cellClass}" title="Chamber ${idx + 1}: ${isVisited || isCurrent ? step.type : 'Unknown'}">${icon}</div>`;
-      })
-      .join('');
-
     header.innerHTML = `
       <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
-        <!-- Hero HP / Gold -->
         <div style="flex:1;">
           <div style="display:flex; align-items:center; gap:8px;">
             <span style="font-weight:bold; font-size:0.9rem;">F${d.floor} · Lv.${g.level}</span>
-            <span class="num font-bold" style="color:var(--gold); font-size:0.95rem;">🪙 ${g.gold}g</span>
+            <span class="num font-bold" style="color:var(--gold); font-size:0.95rem; display:flex; align-items:center; gap:3px;">
+              ${ICONS.coin} ${g.gold}g
+            </span>
+            ${g.pendingStatPoints > 0 ? `<span class="badge-tag pulse" style="background:rgba(245, 197, 66, 0.25); color:var(--gold); font-size:0.65rem;">★ +${g.pendingStatPoints} STATS</span>` : ''}
             <button id="btn-quit-dungeon" class="btn-ghost" style="min-height:26px; padding:2px 8px; font-size:0.72rem; color:var(--bad);" title="Quit floor">✕</button>
           </div>
 
@@ -782,12 +823,9 @@ export function createGauntletView({
           </div>
         </div>
 
-        <!-- Bit-Style Mini-Map in top-right HUD (80-100px) -->
         <div class="minimap-box" id="minimap-box">
-          <div class="minimap-grid">
-            ${minimapCellsHtml}
-          </div>
-          <div class="minimap-caption num">CHAMBER ${Math.min(d.stepIndex + 1, d.stepsCount)}/${d.stepsCount}</div>
+          <div class="minimap-grid">${minimapCellsHtml}</div>
+          <div class="minimap-caption num">CHAMBERS: ${chamberIdx + 1}/${d.stepsCount}</div>
         </div>
       </div>
     `;
@@ -802,20 +840,17 @@ export function createGauntletView({
 
     wrap.appendChild(header);
 
-    // Main Stage Area (Battle vs Chamber Step)
     if (g.phase === 'battle' && g.beast) {
       wrap.appendChild(createBattleStage());
     } else {
-      wrap.appendChild(createChamberStepStage());
+      wrap.appendChild(createChamberStepStage(chamberNum, d.stepsCount));
     }
 
-    // Battle Log
     wrap.appendChild(createCompactLog());
-
     return wrap;
   }
 
-  // 4. BATTLE STAGE
+  // 3. BATTLE STAGE
   function createBattleStage() {
     const beast = g.beast;
     const wrap = document.createElement('div');
@@ -826,11 +861,8 @@ export function createGauntletView({
     const tierName = TIER_NAMES[beast.tier] || 'Common';
     const isNamed = Boolean(beast.prefix || beast.isBoss);
     const fullName = beast.displayName || beast.name;
-
-    // Real Beast Art
     const artSrc = artForBeast(beast.id) || beast.art || `/beasts/art/${beast.id}.svg`;
 
-    // Type advantage check
     const wepType = TYPE_OF_WEAPON[g.weapon.type];
     const multClass = typeMultiplierClass(wepType, beast.type);
     let hintText = '1.0x Match';
@@ -846,7 +878,6 @@ export function createGauntletView({
     wrap.innerHTML = `
       ${isNamed ? `<div class="boss-banner ${beast.isBoss ? 'boss' : 'named'}">★ ${beast.isBoss ? 'BOSS ENCOUNTER' : 'NAMED BEAST'} — Defeat to capture!</div>` : ''}
 
-      <!-- Enemy Sprite at Top -->
       <div class="battle-beast-card" style="border-color:${tierColor};">
         <div class="battle-art-wrap">
           <img id="battle-beast-img" src="${artSrc}" alt="${fullName}" />
@@ -865,9 +896,7 @@ export function createGauntletView({
         </div>
       </div>
 
-      <!-- Bottom Hero & Companion Stage -->
       <div class="battle-allies-row">
-        <!-- Companion Sprite -->
         <div class="battle-ally-card companion">
           <div class="ally-thumb-slot">
             <img src="${currentCompanion ? (artForBeast(currentCompanion.id) || currentCompanion.art || `/beasts/art/${currentCompanion.id}.svg`) : artSrc}" />
@@ -878,33 +907,34 @@ export function createGauntletView({
           </div>
         </div>
 
-        <!-- Hero Card -->
         <div class="battle-ally-card battle-hero-card">
           <div class="ally-info" style="text-align:right;">
             <div style="font-weight:bold; font-size:0.8rem;">Adventurer</div>
             <div style="font-size:0.7rem; color:var(--t4);">${g.weapon.type} T${g.weapon.tier}</div>
           </div>
           <div class="ally-thumb-slot hero-slot">
-            <span>⚔️</span>
+            <span>${ICONS.sword}</span>
           </div>
         </div>
       </div>
 
-      <!-- Combat Action Buttons in Thumb Zone -->
       <div class="battle-actions-thumb-zone">
-        <button id="btn-attack" class="btn-primary arcade-btn" style="flex:2; height:50px; font-size:1.1rem;">
-          ⚔️ ATTACK
+        <button id="btn-attack" class="btn-primary arcade-btn" style="flex:2; height:50px; font-size:1.1rem; display:flex; align-items:center; justify-content:center; gap:6px;">
+          ${ICONS.sword} ATTACK
         </button>
         <button id="btn-flee" class="btn-ghost arcade-btn" style="flex:1; height:50px; border:1px solid var(--line); font-size:0.88rem;">
-          🏃 FLEE (30%)
+          FLEE (30%)
         </button>
       </div>
     `;
 
     const img = wrap.querySelector('#battle-beast-img');
     if (img) img.onerror = () => handleArtError(img, beast);
-    const allyImg = wrap.querySelector('.battle-ally-card.companion img');
-    if (allyImg && currentCompanion) allyImg.onerror = () => handleArtError(allyImg, currentCompanion);
+
+    const allyImg = wrap.querySelector('.ally-thumb-slot img');
+    if (allyImg && currentCompanion) {
+      allyImg.onerror = () => handleArtError(allyImg, currentCompanion);
+    }
 
     wrap.querySelector('#btn-attack').onclick = executeAttack;
     wrap.querySelector('#btn-flee').onclick = executeFlee;
@@ -912,25 +942,53 @@ export function createGauntletView({
     return wrap;
   }
 
-  // 5. CHAMBER STEP STAGE (Explore step in dungeon)
-  function createChamberStepStage() {
+  // 4. CHAMBER STEP STAGE (Full-Screen Atmospheric Corridor Scene)
+  function createChamberStepStage(chamberNum, totalChambers) {
     const wrap = document.createElement('div');
-    wrap.className = 'chamber-step-panel arcade-panel';
+    wrap.className = 'chamber-corridor-scene';
 
-    const d = g.dungeon;
-    const currentStep = d ? d.steps[d.stepIndex] : null;
+    const compArt = currentCompanion ? (artForBeast(currentCompanion.id) || currentCompanion.art || `/beasts/art/${currentCompanion.id}.svg`) : null;
 
     wrap.innerHTML = `
-      <div style="text-align:center; padding:18px 10px;">
-        <div style="font-size:2.8rem; margin-bottom:8px;">🚪</div>
-        <h3 class="arcade-title" style="font-size:1.15rem; color:var(--text);">CHAMBER ${d ? d.stepIndex + 1 : 1} OF ${d ? d.stepsCount : 12}</h3>
-        <p style="font-size:0.8rem; color:var(--muted); margin:6px 0 16px;">
-          The damp stone corridor stretches into the dark. Prepare for traps or wild beasts.
+      <!-- Torch Sconces with Animated Flicker -->
+      <div class="corridor-torch torch-left">
+        <div class="torch-flame"></div>
+      </div>
+      <div class="corridor-torch torch-right">
+        <div class="torch-flame"></div>
+      </div>
+
+      <!-- Corridor Arch & Doorway -->
+      <div class="corridor-arch-center">
+        <div class="corridor-portal-frame">
+          <div class="portal-svg-wrap">${ICONS.door}</div>
+        </div>
+        <h3 class="arcade-title" style="font-size:1.25rem; color:var(--text); margin-top:8px;">
+          CORRIDOR TO CHAMBER ${chamberNum} OF ${totalChambers}
+        </h3>
+        <p style="font-size:0.82rem; color:var(--muted); margin:4px 0 16px;">
+          The damp stone corridor stretches forward into darkness.
         </p>
 
-        <!-- Advance Chamber Button in Thumb Zone -->
+        <!-- Visible Hero & Companion Sprites Advancing -->
+        <div class="corridor-party-row">
+          ${compArt ? `
+            <div class="corridor-comp-slot" title="${currentCompanion?.name || 'Companion'}">
+              <img src="${compArt}" class="corridor-comp-img bounce-idle" alt="Companion" />
+              <div class="corridor-party-tag">${currentCompanion?.name || 'Ally'}</div>
+            </div>
+          ` : ''}
+          <div class="corridor-hero-slot" title="Adventurer">
+            <div class="corridor-hero-icon">${ICONS.sword}</div>
+            <div class="corridor-party-tag">Hero Lv.${g.level}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Action Button in Thumb Zone -->
+      <div class="corridor-action-zone">
         <button id="btn-explore" class="btn-primary arcade-btn" style="width:100%; height:52px; font-size:1.1rem;">
-          ADVANCE TO CHAMBER ${d ? d.stepIndex + 1 : 1} ▶
+          ENTER CHAMBER ${chamberNum} ▶
         </button>
 
         <div style="display:flex; justify-content:center; align-items:center; gap:8px; margin-top:12px;">
@@ -943,6 +1001,11 @@ export function createGauntletView({
       </div>
     `;
 
+    const compImg = wrap.querySelector('.corridor-comp-img');
+    if (compImg && currentCompanion) {
+      compImg.onerror = () => handleArtError(compImg, currentCompanion);
+    }
+
     wrap.querySelector('#btn-explore').onclick = executeStep;
 
     const autoChk = wrap.querySelector('#chk-auto-battle');
@@ -954,31 +1017,115 @@ export function createGauntletView({
     return wrap;
   }
 
+  // 5. NAMED BEAST DISCOVERY REVEAL MODAL (Card-Flip Moment)
+  function createNamedRevealScreen(namedBeast) {
+    const wrap = document.createElement('div');
+    wrap.className = 'named-capture-modal-scene';
+
+    const art = artForBeast(namedBeast.id) || namedBeast.art || `/beasts/art/${namedBeast.id}.svg`;
+    const tierCol = TIER_COLORS[namedBeast.tier] || 'var(--gold)';
+    const isFloorWon = Boolean(dungeonClearedLoot);
+
+    wrap.innerHTML = `
+      <div class="named-capture-card-box card-flip" style="border: 2px solid ${tierCol};">
+        <div class="named-sparkle-halo" style="background: radial-gradient(circle, ${tierCol}30 0%, transparent 70%);"></div>
+        <div class="badge-tag" style="background:${tierCol}22; color:${tierCol}; border:1px solid ${tierCol}; font-size:0.75rem; font-weight:bold; letter-spacing:0.05em; margin-bottom:10px; padding:3px 10px; border-radius:12px; z-index:1;">
+          ★ NAMED BEAST DISCOVERED! ★
+        </div>
+        <div class="named-art-frame" style="border-color:${tierCol};">
+          <img src="${art}" alt="${namedBeast.name}" class="named-beast-portrait" />
+        </div>
+        <h2 class="arcade-title" style="color:var(--gold); font-size:1.35rem; margin:6px 0 2px; z-index:1; word-break:break-word;">
+          ${namedBeast.prefix ? `${namedBeast.prefix} ` : ''}${namedBeast.name}
+        </h2>
+        <div style="font-size:0.85rem; color:${tierCol}; font-weight:bold; margin-bottom:6px; z-index:1;">
+          Tier ${namedBeast.tier} · ${namedBeast.type} Beast (Level ${namedBeast.level})
+        </div>
+        <p style="font-size:0.8rem; color:var(--muted); line-height:1.4; margin:8px 0 14px; z-index:1;">
+          Recorded in Beast Dex as <strong style="color:#7da5ff;">Discovered (Untamed)</strong>! To tame and recruit this beast as an active companion ally, spin and tame it in the Roulette Wheel.
+        </p>
+
+        <div style="width:100%; z-index:1; margin-top:6px;">
+          <button id="btn-named-continue" class="btn-primary arcade-btn" style="width:100%; height:48px; font-size:1rem; font-weight:bold;">
+            ${isFloorWon ? 'Proceed to Floor Victory ▶' : 'Continue Dungeon Run ▶'}
+          </button>
+        </div>
+      </div>
+    `;
+
+    const img = wrap.querySelector('.named-beast-portrait');
+    if (img) img.onerror = () => handleArtError(img, namedBeast);
+
+    wrap.querySelector('#btn-named-continue').onclick = () => {
+      activeNamedReveal = null;
+      render();
+    };
+
+    return wrap;
+  }
+
   // 6. DUNGEON CLEARED SCREEN
   function createDungeonClearedScreen() {
     const wrap = document.createElement('div');
     wrap.className = 'dungeon-cleared-wrap arcade-panel';
-
     const loot = dungeonClearedLoot;
 
     wrap.innerHTML = `
       <div style="text-align:center; padding:20px 10px;">
-        <div style="font-size:3rem; margin-bottom:8px;">🏆</div>
+        <div class="cleared-trophy-icon" style="margin-bottom:8px;">${ICONS.trophy}</div>
         <h2 class="arcade-title" style="color:var(--gold); font-size:1.4rem;">FLOOR ${loot.floor} CLEARED!</h2>
-        <p class="subhead" style="margin-top:4px;">The chamber boss was vanquished! Returning to Camp.</p>
+        <p class="subhead" style="margin-top:4px;">The chamber boss was vanquished! Floor completed successfully.</p>
 
-        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; margin:16px 0; background:var(--panel-2); padding:12px; border-radius:10px; border:1px solid var(--line); font-size:0.85rem;">
-          <div>Gold Loot: <strong class="num" style="color:var(--gold);">+${loot.gold}g</strong></div>
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; margin:14px 0; background:var(--panel-2); padding:12px; border-radius:10px; border:1px solid var(--line); font-size:0.85rem;">
+          <div>Gold Loot: <strong class="num" style="color:var(--gold);">${ICONS.coin} +${loot.gold}g</strong></div>
           <div>XP Earned: <strong class="num" style="color:var(--good);">+${loot.xp} XP</strong></div>
           <div>Beasts Slain: <strong class="num">${loot.kills}</strong></div>
           <div>Captures: <strong class="num" style="color:var(--gold);">${loot.capturedCount}</strong></div>
         </div>
+
+        <!-- Level Up Stat Allocation Menu Directly on Dungeon Cleared Screen -->
+        ${g.pendingStatPoints > 0 ? `
+          <div class="stat-alloc-panel dungeon-cleared-level-up-box" style="margin: 16px 0; padding: 14px 12px; background: rgba(245, 197, 66, 0.08); border: 2px solid var(--gold); border-radius: 12px; text-align: left;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
+              <strong style="color:var(--gold); font-size:0.88rem; display:flex; align-items:center; gap:5px;">
+                ★ LEVEL UP! ALLOCATE STAT POINTS
+              </strong>
+              <span class="badge-tag pulse" style="background:var(--gold); color:#000; font-weight:800; font-size:0.75rem; padding:2px 8px; border-radius:12px;">
+                ${g.pendingStatPoints} POINT${g.pendingStatPoints > 1 ? 'S' : ''} AVAILABLE
+              </span>
+            </div>
+            <p style="font-size:0.75rem; color:var(--muted); margin:0 0 10px 0; line-height:1.4;">
+              Spend your earned stat points to upgrade your hero's attributes:
+            </p>
+            <div class="stat-alloc-grid" style="display:grid; grid-template-columns: repeat(3, 1fr); gap:6px;">
+              <button class="stat-alloc-btn" data-s="STR"><strong>+1 STR</strong><span>(${g.stats.STR})</span><small>+Damage</small></button>
+              <button class="stat-alloc-btn" data-s="DEX"><strong>+1 DEX</strong><span>(${g.stats.DEX})</span><small>+Flee/Trap</small></button>
+              <button class="stat-alloc-btn" data-s="VIT"><strong>+1 VIT</strong><span>(${g.stats.VIT})</span><small>+15 Max HP</small></button>
+              <button class="stat-alloc-btn" data-s="INT"><strong>+1 INT</strong><span>(${g.stats.INT})</span><small>+Avoid Trap</small></button>
+              <button class="stat-alloc-btn" data-s="WIS"><strong>+1 WIS</strong><span>(${g.stats.WIS})</span><small>+Avoid Ambush</small></button>
+              <button class="stat-alloc-btn" data-s="CHA"><strong>+1 CHA</strong><span>(${g.stats.CHA})</span><small>+Discount</small></button>
+            </div>
+          </div>
+        ` : `
+          <div style="margin: 12px 0; padding: 8px 12px; background: rgba(62, 207, 110, 0.1); border: 1px solid var(--good); border-radius: 8px; font-size: 0.8rem; color: var(--good);">
+            ✓ All stat points allocated! Hero stats updated.
+          </div>
+        `}
 
         <button id="btn-return-camp" class="btn-primary arcade-btn" style="width:100%; height:50px; font-size:1.05rem;">
           RETURN TO CAMP (Heal & Shop)
         </button>
       </div>
     `;
+
+    wrap.querySelectorAll('.stat-alloc-btn').forEach((btn) => {
+      btn.onclick = () => {
+        const s = btn.dataset.s;
+        allocateStat(g, s);
+        playLevelUpSound();
+        render();
+      };
+    });
 
     wrap.querySelector('#btn-return-camp').onclick = () => {
       dungeonClearedLoot = null;
@@ -990,21 +1137,52 @@ export function createGauntletView({
     return wrap;
   }
 
-  // 7. DEATH SCREEN
+  // 7. DEATH SCREEN (Full Run Summary)
   function createDeathScreen() {
     const wrap = document.createElement('div');
     wrap.className = 'death-screen-wrap arcade-panel';
 
-    wrap.innerHTML = `
-      <div style="text-align:center; padding:24px 12px;">
-        <div style="font-size:3.5rem; margin-bottom:8px;">💀</div>
-        <h2 class="arcade-title" style="color:var(--bad); font-size:1.5rem;">YOU HAVE FALLEN</h2>
-        <p style="font-size:0.85rem; color:var(--muted); margin:6px 0 16px;">
-          Slain by ${g.diedTo || 'the dungeon depths'}. Final Level: <strong>${g.level}</strong>. Kills: <strong>${g.kills}</strong>.
-        </p>
+    const killerName = g.diedTo || 'the dungeon depths';
+    const killerArt = g.beast ? (artForBeast(g.beast.id) || g.beast.art || `/beasts/art/${g.beast.id}.svg`) : null;
+    const chambersCleared = g.dungeon ? Math.max(0, g.dungeon.stepIndex) : 0;
+    const capturesMade = (albumData && albumData.capturedNamed ? albumData.capturedNamed.length : 0);
 
-        <button id="btn-retry-gauntlet" class="btn-primary arcade-btn" style="width:100%; height:52px; font-size:1.1rem;">
-          ⚔️ ENTER NEW RUN
+    wrap.innerHTML = `
+      <div style="text-align:center; padding:20px 12px;">
+        <div class="death-skull-icon" style="color:var(--bad); margin-bottom:8px;">${ICONS.skull}</div>
+        <h2 class="arcade-title" style="color:var(--bad); font-size:1.5rem; margin-bottom:4px;">YOU HAVE FALLEN</h2>
+        <div style="font-size:0.85rem; color:var(--muted); margin-bottom:14px;">
+          Slain by <strong style="color:var(--text);">${killerName}</strong>
+        </div>
+
+        ${killerArt ? `
+          <div class="death-killer-frame">
+            <img src="${killerArt}" alt="${killerName}" class="death-killer-art" />
+          </div>
+        ` : ''}
+
+        <!-- Run Summary Grid -->
+        <div class="death-summary-grid">
+          <div class="summary-tile">
+            <span class="stat-label">Floor</span>
+            <span class="stat-val num" style="color:var(--gold); font-size:1.2rem;">${g.dungeon?.floor || 1}</span>
+          </div>
+          <div class="summary-tile">
+            <span class="stat-label">Chambers</span>
+            <span class="stat-val num" style="font-size:1.2rem;">${chambersCleared}/${g.dungeon?.stepsCount || 12}</span>
+          </div>
+          <div class="summary-tile">
+            <span class="stat-label">Beasts Slain</span>
+            <span class="stat-val num" style="color:var(--bad); font-size:1.2rem;">${g.kills}</span>
+          </div>
+          <div class="summary-tile">
+            <span class="stat-label">Gold</span>
+            <span class="stat-val num" style="color:var(--gold); font-size:1.2rem;">${g.gold}g</span>
+          </div>
+        </div>
+
+        <button id="btn-retry-gauntlet" class="btn-primary arcade-btn" style="width:100%; height:52px; font-size:1.1rem; margin-top:14px;">
+          ENTER NEW RUN
         </button>
         <button id="btn-death-exit" class="btn-ghost arcade-btn" style="width:100%; margin-top:8px;">
           Return to Hub
@@ -1012,12 +1190,13 @@ export function createGauntletView({
       </div>
     `;
 
-    wrap.querySelector('#btn-retry-gauntlet').onclick = () => {
-      initGame();
-    };
-    wrap.querySelector('#btn-death-exit').onclick = () => {
-      if (onExit) onExit();
-    };
+    const killerImg = wrap.querySelector('.death-killer-art');
+    if (killerImg && g.beast) {
+      killerImg.onerror = () => handleArtError(killerImg, g.beast);
+    }
+
+    wrap.querySelector('#btn-retry-gauntlet').onclick = () => initGame();
+    wrap.querySelector('#btn-death-exit').onclick = () => { if (onExit) onExit(); };
 
     return wrap;
   }
@@ -1026,7 +1205,6 @@ export function createGauntletView({
   function createCompactLog() {
     const wrap = document.createElement('div');
     wrap.className = 'combat-log-container';
-
     const recentLines = g.log.slice(-2);
 
     wrap.innerHTML = `
@@ -1037,9 +1215,7 @@ export function createGauntletView({
         </button>
       </div>
       <div class="combat-log-content ${showFullLog ? 'expanded' : ''}">
-        ${(showFullLog ? g.log : recentLines)
-          .map((line) => `<div class="log-entry">${line}</div>`)
-          .join('')}
+        ${(showFullLog ? g.log : recentLines).map((line) => `<div class="log-entry">${line}</div>`).join('')}
       </div>
     `;
 

@@ -11,6 +11,7 @@ import {
   playLevelUpSound,
 } from '../audio.js';
 import { handleArtError, artForBeast } from '../beastLoader.js';
+import { loadAlbum, saveAlbum } from '../albumStorage.js';
 
 const LANES = [
   { id: 0, label: '◀', keys: ['d', 'D', 'ArrowLeft', 'a', 'A'], color: '#3d8bff', keyLabel: 'D' },
@@ -243,7 +244,7 @@ export function createDojoView({ companion, onReward, onExit, onEnterGauntlet })
     const img = container.querySelector('#rhythm-comp-sprite');
     if (img && companion) img.onerror = () => handleArtError(img, companion);
 
-    // Attach lane pad interactions
+    // Attach lane board & bottom pad interactions
     container.querySelectorAll('.rhythm-lane-pad').forEach((pad) => {
       const laneId = parseInt(pad.dataset.lane, 10);
       const triggerPad = (e) => {
@@ -253,6 +254,20 @@ export function createDojoView({ companion, onReward, onExit, onEnterGauntlet })
         setTimeout(() => pad.classList.remove('pad-active'), 100);
       };
       pad.addEventListener('pointerdown', triggerPad);
+    });
+
+    container.querySelectorAll('.rhythm-lane').forEach((laneEl) => {
+      const laneId = parseInt(laneEl.dataset.lane, 10);
+      const triggerLane = (e) => {
+        e.preventDefault();
+        triggerHit(laneId);
+        const pad = container.querySelector(`.rhythm-lane-pad.pad-${laneId}`);
+        if (pad) {
+          pad.classList.add('pad-active');
+          setTimeout(() => pad.classList.remove('pad-active'), 100);
+        }
+      };
+      laneEl.addEventListener('pointerdown', triggerLane);
     });
 
     container.querySelector('#btn-pause-dojo').onclick = togglePauseModal;
@@ -534,19 +549,38 @@ export function createDojoView({ companion, onReward, onExit, onEnterGauntlet })
 
     let grade = 'C';
     let strikeBonusPct = 5;
+    let friendlinessGain = 5;
 
     if (accuracy >= 95) {
       grade = 'S';
       strikeBonusPct = 20;
+      friendlinessGain = 15;
     } else if (accuracy >= 85) {
       grade = 'A';
       strikeBonusPct = 15;
+      friendlinessGain = 12;
     } else if (accuracy >= 70) {
       grade = 'B';
       strikeBonusPct = 10;
+      friendlinessGain = 8;
     } else {
       grade = 'C';
       strikeBonusPct = 5;
+      friendlinessGain = 5;
+    }
+
+    // Increase companion friendliness through Dojo rhythm training
+    const album = loadAlbum();
+    const cId = companion ? String(companion.id) : (album.activeCompanionId ? String(album.activeCompanionId) : null);
+    let oldFriendliness = 10;
+    let newFriendliness = 15;
+    if (cId) {
+      if (!album.friendliness) album.friendliness = {};
+      oldFriendliness = album.friendliness[cId] !== undefined ? album.friendliness[cId] : (companion?.friendliness || 10);
+      newFriendliness = Math.min(100, oldFriendliness + friendlinessGain);
+      album.friendliness[cId] = newFriendliness;
+      if (companion) companion.friendliness = newFriendliness;
+      saveAlbum(album);
     }
 
     const goldReward = Math.max(15, Math.floor(score / 40) + (grade === 'S' ? 30 : 15));
@@ -559,6 +593,10 @@ export function createDojoView({ companion, onReward, onExit, onEnterGauntlet })
         accuracy,
         grade,
         strikeBonusPct,
+        friendlinessGain,
+        oldFriendliness,
+        newFriendliness,
+        companionId: cId,
         essence: essenceReward,
         gold: goldReward,
       });
@@ -573,6 +611,9 @@ export function createDojoView({ companion, onReward, onExit, onEnterGauntlet })
       goodCount,
       missCount,
       strikeBonusPct,
+      friendlinessGain,
+      oldFriendliness,
+      newFriendliness,
       goldReward,
       essenceReward,
     });
@@ -596,6 +637,17 @@ export function createDojoView({ companion, onReward, onExit, onEnterGauntlet })
           ${res.grade === 'S' ? 'MASTER DISCIPLINE!' : res.grade === 'A' ? 'GREAT HARMONY!' : 'TRAINING COMPLETE'}
         </h3>
 
+        <!-- Companion Friendliness Growth Card -->
+        <div class="dojo-friendliness-card" style="margin:10px 0; padding:10px 14px; background:rgba(255, 94, 148, 0.12); border:1px solid rgba(255, 94, 148, 0.45); border-radius:10px; text-align:center;">
+          <div style="font-size:0.75rem; color:#ff5e94; font-weight:bold; text-transform:uppercase;">♥ Companion Friendliness Grew</div>
+          <div style="font-size:1.15rem; font-weight:900; color:#ff5e94; margin:3px 0;">
+            ${res.oldFriendliness}% → ${res.newFriendliness}% (+${res.friendlinessGain}%)
+          </div>
+          <div style="font-size:0.72rem; color:var(--muted);">
+            ${compName} now provides +${res.newFriendliness}% Companion Strike & -${Math.round(res.newFriendliness * 0.4)}% incoming damage guard in Gauntlet Camp!
+          </div>
+        </div>
+
         <!-- Companion Strike Bonus Banner -->
         <div class="dojo-reward-banner">
           <div style="font-size:0.75rem; text-transform:uppercase; color:var(--gold); font-weight:bold;">
@@ -604,6 +656,10 @@ export function createDojoView({ companion, onReward, onExit, onEnterGauntlet })
           <div style="font-size:1.1rem; font-weight:bold; color:#fff; margin-top:2px;">
             +${res.strikeBonusPct}% Companion Strike Damage
           </div>
+          <div style="font-size:0.75rem; color:var(--muted); margin-top:2px;">
+            ${compName} strikes harder during your next Gauntlet runs!
+          </div>
+        </div>
           <div style="font-size:0.75rem; color:var(--muted); margin-top:2px;">
             ${compName} strikes harder during your next Gauntlet runs!
           </div>
