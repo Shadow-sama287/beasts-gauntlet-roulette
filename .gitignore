@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Production build artifacts
+dist/
+dist-ssr/
+*.local
+
+# Environment and sensitive files
+.env
+.env.*
+!.env.example
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS and Editor files
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.vscode/
+.idea/
+
+# Vite temporary cache
+.vite/
+.vite-temp/
+
+# Agent and AI instructions / briefs / kits
+AGENTS.md
+beast-gauntlet-agent-brief.md
+GACHA_SYSTEM_SPEC.md
+DECISIONS.md
+beast-gauntlet-kit/
+beasts-hackathon-skill/
+.agent/
+.agents/
+.claude/
+.gemini/
